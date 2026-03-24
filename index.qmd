@@ -1,0 +1,15 @@
+---
+title: "AI in Clinical Research"
+subtitle: "Master di II livello in Metodologia della Ricerca e della Sperimentazione Clinica"
+---
+
+Benvenuto nel sito del modulo **Laboratorio di Intelligenza Artificiale applicata agli Studi Clinici**.
+
+## Struttura del corso
+
+Il corso è articolato in tre sessioni da 4 ore, ciascuna composta da una parte
+teorica e una pratica.
+
+## Materiale
+
+Il materiale dei laboratori è disponibile nel menu **Labs** in alto.

@@ -1,0 +1,22 @@
+project:
+  type: website
+  output-dir: docs
+
+website:
+  title: "AI in Clinical Research"
+  navbar:
+    left:
+      - text: "Home"
+        href: index.qmd
+      - text: "Labs"
+        menu:
+          - text: "Lab 1a — Introduction to R"
+            href: labs/lab1a-intro-r.qmd
+          - text: "Lab 1b — Working with Data"
+            href: labs/lab1b-working-with-data.qmd
+
+format:
+  html:
+    theme: cosmo
+    toc: true
+    code-link: true

@@ -1,0 +1,554 @@
+---
+title: "Introduction to R"
+author: "Alessandro Barberis"
+date: last-modified
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-title: "Contents"
+    number-sections: true
+    code-fold: false
+    theme: cosmo
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# R Markdown and Quarto
+
+This document is written in **Quarto**, the next-generation version of R Markdown.
+Quarto documents mix prose, code, and output in a single file, and can be rendered to
+HTML, PDF, or Word. You are reading the HTML output.
+
+Each grey box below is an **R code chunk**. When you render the document, R executes
+each chunk in order and embeds the output directly beneath it. You can also run chunks
+interactively in RStudio by clicking the green arrow on the top-right of each chunk.
+
+```{r example-chunk}
+# This is a code chunk. Run it to see the output below.
+summary(cars)
+```
+
+::: {.callout-tip}
+## How to use this document
+The sections marked **Core** cover the material we will go through together in the
+lab session. Sections inside collapsible boxes marked **Going deeper** are additional
+material for you to explore at your own pace after the session.
+:::
+
+---
+
+# Data types
+
+Every value in R has a type. Understanding types is essential because many common
+errors in R arise from a mismatch between the type you expect and the type you actually
+have (for instance, a number stored as text that refuses to be plotted on a numeric axis).
+
+The most common types you will encounter in biomedical data analysis are **logical**,
+**integer**, **double**, and **character**. We cover these first, then provide an
+overview of the less common types for reference.
+
+You can always inspect any object with three complementary functions:
+
+| Function | What it tells you |
+|----------|-------------------|
+| `typeof()` | Internal storage type |
+| `mode()` | Storage mode (similar to `typeof`, slightly higher level) |
+| `class()` | How R treats the object in function dispatch |
+
+## Logical
+
+Logical values are `TRUE` or `FALSE`. They arise naturally from comparisons and
+conditions, and are the backbone of filtering and subsetting data.
+
+```{r logical_1}
+# Create a logical vector
+l <- c(TRUE, FALSE, TRUE)
+l
+```
+
+```{r logical_2}
+typeof(l)
+mode(l)
+class(l)
+```
+
+## Integer
+
+Integers are whole numbers, stored more efficiently than decimals. In R they are
+written with a trailing `L`. You will encounter them most often as counts or indices.
+
+```{r integer_1}
+# Create an integer vector
+i <- c(1L, 2L, 3L)
+i
+```
+
+```{r integer_2}
+typeof(i)
+mode(i)
+class(i)
+```
+
+## Double
+
+Doubles (also called *numeric* in R) are real numbers with decimal precision. Most
+continuous measurements — age, weight, expression values, survival time — are doubles.
+
+```{r double_1}
+# Create a double vector
+d <- c(1.0, 2.5, 3.7)
+d
+```
+
+```{r double_2}
+typeof(d)
+mode(d)
+class(d)
+```
+
+## Character
+
+Character values (strings) hold text. They are used for labels, patient IDs, gene
+names, and any categorical variable before it is converted to a factor.
+
+```{r character_1}
+# Create a character vector
+c.v <- c("a", "b", "c")
+c.v
+```
+
+```{r character_2}
+typeof(c.v)
+mode(c.v)
+class(c.v)
+```
+
+## Less common types {.unnumbered}
+
+::: {.callout-note collapse="true"}
+## Going deeper: complex and raw types
+
+These two types rarely appear in biomedical data analysis, but are included here for
+completeness.
+
+**Complex** numbers have a real and an imaginary part (written `a + bi`). They arise
+in signal processing and certain mathematical transformations (e.g. Fourier analysis).
+
+```{r complex_1}
+cpx <- c(1+2i, 3+4i, 5+6i)
+cpx
+typeof(cpx)
+```
+
+**Raw** values store binary data as bytes. You might encounter them when reading binary
+file formats or network data.
+
+```{r raw_1}
+r <- as.raw(c(1, 2, 3))
+r
+typeof(r)
+```
+:::
+
+---
+
+# Data structures
+
+A data structure is a way of organising multiple values. The four structures you will
+use most in data analysis are **vectors**, **matrices**, **data frames**, and **lists**.
+The table below gives a quick orientation:
+
+| Structure | Dimensions | Homogeneous? | Typical use |
+|-----------|-----------|--------------|-------------|
+| Vector | 1D | Yes | Single variable |
+| Matrix | 2D | Yes | Numeric data (expression matrix) |
+| List | 1D | No | Mixed-type collections |
+| Data frame | 2D | No (per column) | Clinical / omics datasets |
+
+## Vectors
+
+A vector is a one-dimensional, ordered collection of values **all of the same type**.
+It is the fundamental building block in R — a single number is actually a vector of
+length 1.
+
+### Create
+
+```{r vector_1}
+# Combine values with c()
+v <- c(1, 2, 3, 4, 5)
+v
+```
+
+```{r vector_2}
+# Regular sequence with seq()
+v <- seq(from = 1, to = 10, by = 2)
+v
+```
+
+```{r vector_3}
+# Repeated pattern with rep()
+v <- rep(x = 1:3, times = 2)
+v
+```
+
+```{r vector_4}
+# Random sample (set.seed() makes the result reproducible)
+set.seed(42)
+v <- sample(x = 1:10, size = 5, replace = FALSE)
+v
+```
+
+::: {.callout-tip}
+## Reproducibility tip
+Use `set.seed()` before any function that involves randomness. This ensures that
+anyone running your code will get the same result — essential for reproducible research.
+:::
+
+### Inspect
+
+```{r vector_5}
+typeof(v)
+class(v)
+length(v)
+```
+
+Elements are accessed with square bracket indexing `[]`. R uses **1-based indexing**
+(the first element is `[1]`, not `[0]` as in Python).
+
+```{r vector_subsetting}
+v[1]        # first element
+v[1:3]      # elements 1 to 3
+```
+
+Vectors can also have names, allowing access by label:
+
+```{r vector_subsetting3}
+names(v) <- c("a", "b", "c", "d", "e")
+v["a"]
+```
+
+### Modify
+
+```{r vector_modify1}
+v <- c(v, 6)         # append an element
+v
+```
+
+```{r vector_modify2}
+v <- v[-1]           # remove first element
+v
+```
+
+```{r vector_modify3}
+v[1] <- 10           # overwrite first element
+v
+```
+
+## Matrices
+
+A matrix is a two-dimensional, homogeneous structure — essentially a vector with
+rows and columns. Matrices are common in bioinformatics: gene expression data is
+often stored as a matrix with genes on rows and samples on columns.
+
+### Create
+
+```{r matrix_1}
+m <- matrix(
+  data  = 1:9,
+  nrow  = 3,
+  ncol  = 3,
+  byrow = FALSE    # fill column by column (default)
+)
+m
+```
+
+A matrix can also be created by assigning dimensions to a vector with `dim()`:
+
+```{r matrix_from_vector2}
+v2 <- 1:9
+dim(v2) <- c(3, 3)
+identical(m, v2)   # TRUE: the two objects are the same
+```
+
+### Inspect
+
+Elements are indexed by `[row, col]`. Leaving one dimension blank selects everything
+in that dimension.
+
+```{r matrix_subsetting}
+m[2, 1]          # element at row 2, column 1
+m[1:2, ]         # first two rows, all columns
+```
+
+Named indexing also works for matrices:
+
+```{r matrix_subsetting3}
+rownames(m) <- c("a", "b", "c")
+colnames(m) <- c("d", "e", "f")
+m["a", "d"]
+```
+
+```{r matrix_dim}
+dim(m)     # returns c(nrows, ncols)
+```
+
+### Modify
+
+```{r matrix_modify}
+m <- rbind(m, c(10, 11, 12))   # add a row
+m <- m[-4, ]                   # remove 4th row
+m <- cbind(m, c(13, 14, 15))   # add a column
+m <- m[, -4]                   # remove 4th column
+m[1, 1] <- 10                  # modify one element
+m
+```
+
+## Lists
+
+A list is a one-dimensional, **heterogeneous** structure: each element can be of any
+type, including another list. Lists are how R represents complex objects such as the
+output of a statistical model.
+
+### Create
+
+```{r list_1}
+l <- list(
+  name   = "John",
+  age    = 30,
+  height = 1.75
+)
+l
+```
+
+### Inspect
+
+Lists support three types of subsetting, with subtly different results:
+
+```{r list_subsetting}
+l[1]       # returns a list of length 1
+l[[1]]     # returns the element itself
+l$name     # same as l[["name"]], using the element name
+```
+
+```{r list_length}
+length(l)
+```
+
+### Modify
+
+```{r list_modify}
+l <- c(l, list(weight = 70))   # add an element
+l$height <- NULL               # remove an element
+l$name <- "Jane"               # modify an element
+l
+```
+
+::: {.callout-note collapse="true"}
+## Going deeper: the `[[` vs `[` distinction
+
+`[` always returns a list (the container), while `[[` returns the element inside.
+This matters when passing list elements to functions:
+
+```{r list_double_bracket}
+# These two calls behave differently
+class(l[1])    # "list"
+class(l[[1]])  # "character"
+```
+
+Most functions expect the element itself, not a list containing it — so `[[` and `$`
+are more commonly useful when working with list contents.
+:::
+
+## Data frames
+
+A data frame is the central data structure for tabular data in R. It is a
+**two-dimensional, heterogeneous** structure: a collection of vectors of equal length,
+each potentially of a different type. Each row represents an observation (e.g. a
+patient) and each column a variable (e.g. age, sex, diagnosis).
+
+### Create
+
+```{r dataframe_1}
+df <- data.frame(
+  patientid = 1:3,
+  sex       = c("M", "F", "M"),
+  age       = c(34, 41, 57)
+)
+df
+```
+
+### Inspect
+
+Three functions cover most inspection needs:
+
+```{r dataframe_inspect}
+head(df)       # first 6 rows
+str(df)        # structure: column types and a preview of values
+summary(df)    # statistical summary per column
+```
+
+### Modify
+
+```{r dataframe_modify}
+# Add a column
+df$height <- c(1.75, 1.68, 1.80)
+df
+
+# Remove a column
+df$height <- NULL
+df
+
+# Add a row — use data.frame() to preserve types
+df <- rbind(df, data.frame(patientid = 4, sex = "F", age = 51))
+df
+```
+
+::: {.callout-warning}
+## Type coercion trap
+Avoid using `c()` to create new rows for a data frame. Because `c()` coerces
+everything to the most general type in the vector, numeric columns will be silently
+converted to character:
+
+```{r coercion_trap}
+# This coerces patientid and age to character — probably not what you want
+df_bad <- rbind(df, c(5, "M", 28))
+str(df_bad)
+```
+:::
+
+## Factors
+
+Factors represent **categorical variables** with a fixed set of possible values
+(called *levels*). They are important for statistical modelling — if you include
+sex or tumour stage in a regression, R needs to know they are categories, not
+arbitrary numbers or strings.
+
+### Create
+
+```{r factor_1}
+f <- factor(
+  c("M", "F", "M"),
+  levels = c("M", "F")
+)
+f
+```
+
+### Inspect
+
+```{r factor_inspect}
+levels(f)       # the possible categories
+table(f)        # frequency of each level
+summary(f)      # similar to table() for factors
+str(f)          # internal representation (integers + levels)
+```
+
+::: {.callout-warning}
+## `as.numeric()` on factors
+`as.numeric()` returns the underlying integer codes (1, 2, 3...), **not** the level
+labels. This is a common source of errors. To get numeric values from a factor whose
+labels are numbers, use `as.numeric(as.character(f))`.
+
+```{r factor_numeric}
+f2 <- factor(c("10", "20", "30"))
+as.numeric(f2)              # returns 1 2 3 — WRONG
+as.numeric(as.character(f2)) # returns 10 20 30 — correct
+```
+:::
+
+### Modify
+
+```{r factor_modify}
+levels(f) <- c(levels(f), "U")   # add a level
+f <- droplevels(f)               # remove unused levels
+f
+```
+
+---
+
+# Functions
+
+A function is a reusable block of code that takes inputs (arguments) and returns an
+output. R comes with thousands of built-in functions, and writing your own is essential
+for keeping your analysis organised and avoiding repetition.
+
+## Create
+
+```{r fun_1}
+myfun <- function(x, y) {
+  result <- x + y
+  return(result)
+}
+```
+
+## Inspect
+
+```{r fun_inspect}
+formals(myfun)      # the argument list
+body(myfun)         # the code inside
+```
+
+## Call
+
+Arguments can be passed by **position** or by **name**. Using names makes code more
+readable and prevents errors when a function has many arguments.
+
+```{r fun_call}
+myfun(4, 6)             # by position
+myfun(x = 4, y = 6)    # by name (preferred)
+```
+
+---
+
+# Input / Output
+
+In practice you will almost always read data from a file and save results to disk.
+
+## Save and load R objects
+
+`save()` and `load()` preserve R objects in their native binary format (`.RData`).
+This is useful for caching intermediate results in a long analysis.
+
+```{r save_load, eval=FALSE}
+save(df, file = "data.RData")
+load(file = "data.RData")
+```
+
+## Read and write CSV
+
+CSV is the most portable format for sharing data between R and other tools.
+
+```{r read_write_csv, eval=FALSE}
+# Write
+write.csv(df, file = "data.csv", row.names = FALSE)
+
+# Read
+df <- read.csv(file = "data.csv")
+```
+
+::: {.callout-note collapse="true"}
+## Going deeper: the `readr` and `data.table` packages
+
+Base R's `read.csv()` is fine for small files. For larger datasets (hundreds of
+thousands of rows), consider:
+
+- `readr::read_csv()` from the tidyverse: faster than base R, better type guessing,
+  and returns a *tibble* instead of a plain data frame.
+- `data.table::fread()`: extremely fast for very large files.
+
+Both packages need to be installed once with `install.packages()` before use.
+:::
+
+---
+
+# Session Info
+
+The section below records the exact versions of R and all loaded packages used to
+generate this document. Including it at the end of every analysis script is good
+practice for reproducibility.
+
+```{r session_info}
+sessionInfo()
+```

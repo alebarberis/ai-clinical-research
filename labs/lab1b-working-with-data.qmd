@@ -1,0 +1,307 @@
+---
+title: "Working with Data"
+author: "Alessandro Barberis"
+date: last-modified
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-title: "Contents"
+    number-sections: true
+    code-fold: false
+    theme: cosmo
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Objective
+
+In this lab we will work with a real clinical dataset from a prostate cancer cohort.
+By the end of the session you will be able to:
+
+- import a tabular dataset into R
+- explore its structure and contents
+- create basic visualisations with [`ggplot2`](https://ggplot2.tidyverse.org)
+- save your plots to disk
+
+We introduce [`ggplot2`](https://ggplot2.tidyverse.org) here as a practical tool. In later labs we will use it
+extensively, so it is worth getting comfortable with its core syntax now.
+
+---
+
+# Setup
+
+## Project structure
+
+This lab assumes you are working inside the course [RStudio](https://posit.co/download/rstudio-desktop/) project. The project uses
+the [`here`](https://here.r-lib.org/) package to construct file paths relative to the project root, so the code
+works regardless of where you have saved the project on your computer.
+
+If you do not have `here` or [`ggplot2`](https://ggplot2.tidyverse.org) installed, run the chunk below **once**:
+
+```{r install, eval=FALSE}
+install.packages(c("here", "ggplot2"))
+```
+
+```{r libraries}
+library(here)
+library(ggplot2)
+```
+
+## The `here` package
+
+`here::here()` always returns the path to the project root, no matter which
+subfolder your `.qmd` file is in. For example:
+
+```{r here_example}
+# Shows the project root on your machine
+here::here()
+```
+
+All file paths in this document are built with `here()`, so you never need to
+adjust them manually.
+
+---
+
+# Dataset: TCGA Prostate Cancer
+
+## About the data
+
+We use clinical data from the **Prostate Adenocarcinoma** cohort of [The Cancer Genome
+Atlas (TCGA)](https://www.cancer.gov/ccg/research/genome-sequencing/tcga), as curated in the
+[TCGA PanCancer Atlas 2018](https://www.cbioportal.org/study/summary?id=prad_tcga_pan_can_atlas_2018).
+This cohort includes 499 patients with matched genomic and clinical data.
+
+[**cBioPortal**](https://www.cbioportal.org) is an open-access platform that provides interactive exploration of
+large-scale cancer genomics datasets. It is widely used in translational oncology
+research and is a key resource you will encounter throughout this master.
+
+## Download the data
+
+1. Go to the
+   [TCGA Prostate Cancer study page](https://www.cbioportal.org/study/summary?id=prad_tcga_pan_can_atlas_2018)
+   on cBioPortal.
+2. Click **Download**.
+3. Unzip the downloaded archive and move the folder
+   `prad_tcga_pan_can_atlas_2018/` into the `data/` folder of the course project.
+
+The file we need is `data_clinical_patient.txt` inside that folder.
+
+::: {.callout-note}
+The dataset is already available in the `data/` folder if you downloaded the full
+course materials from GitHub.
+:::
+
+---
+
+# Import data
+
+The clinical file uses tab-separated values with a 4-line header that describes the
+columns. We skip those lines and read the actual data starting at line 5.
+
+```{r import}
+clinical_data <- read.csv(
+  file             = here("data", "prad_tcga_pan_can_atlas_2018", "data_clinical_patient.txt"),
+  header           = TRUE,
+  skip             = 4,
+  sep              = "\t",
+  stringsAsFactors = FALSE
+)
+```
+
+---
+
+# Explore data
+
+Before plotting or modelling, always explore your data. A few quick checks can save
+hours of debugging later.
+
+```{r explore_head}
+# Preview the first 6 rows
+head(clinical_data)
+```
+
+```{r explore_str}
+# Column names, types, and a sample of values
+str(clinical_data)
+```
+
+```{r explore_summary}
+# Statistical summary of each column
+summary(clinical_data)
+```
+
+::: {.callout-tip}
+## What to look for
+When exploring a new dataset, pay attention to:
+
+- **Missing values** (`NA`): `summary()` reports their count per column.
+- **Unexpected types**: a numeric column stored as character is a common import issue.
+- **Implausible values**: e.g. a patient age of 0 or 999 usually signals a coding
+  convention for missing data.
+:::
+
+---
+
+# Visualise data with `ggplot2`
+
+[`ggplot2`](https://ggplot2.tidyverse.org) implements the *Grammar of Graphics*: every plot is built by combining a
+**dataset**, an **aesthetic mapping** (which variables map to x, y, colour, etc.),
+and one or more **geometric layers** (points, lines, bars, etc.).
+
+The basic template is always:
+
+```r
+ggplot(data, aes(x = ..., y = ...)) +
+  geom_*() +
+  labs(...)
+```
+
+## Scatter plot: age vs. follow-up duration
+
+```{r scatter}
+ggplot(clinical_data, aes(x = AGE, y = DAYS_LAST_FOLLOWUP)) +
+  geom_point(alpha = 0.5) +
+  labs(
+    title = "Age at diagnosis vs. days to last follow-up",
+    x     = "Age at diagnosis (years)",
+    y     = "Days to last follow-up"
+  )
+```
+
+This plot shows the relationship between age at diagnosis and the length of
+follow-up. Each point is one patient. The `alpha` argument controls point
+transparency, which helps reveal overplotted regions.
+
+---
+
+# Save a plot
+
+Use `ggsave()` to export the last plot to a file. Specifying `width`, `height`,
+and `dpi` ensures consistent, publication-quality output.
+
+```{r save_plot, eval=FALSE}
+ggsave(
+  filename = here("output", "scatter_age_followup.png"),
+  plot     = last_plot(),
+  width    = 8,
+  height   = 6,
+  dpi      = 300
+)
+```
+
+::: {.callout-note}
+The `output/` folder must exist before running this chunk. Create it in the Files
+pane of RStudio, or run `dir.create(here("output"))` once.
+:::
+
+---
+
+# Exercises
+
+Work through the exercises below. Try to write the code yourself before looking at
+the solution.
+
+## Exercise 1: Distribution of age at diagnosis
+
+Create a histogram showing the distribution of patient age at diagnosis.
+
+**Hint:** look at the [`ggplot2`](https://ggplot2.tidyverse.org) documentation for `geom_histogram()`.
+Try adjusting the `binwidth` argument to see how it affects the plot.
+
+```{r ex1, eval=FALSE}
+# Your code here
+
+```
+
+::: {.callout-tip collapse="true"}
+## Solution
+
+```{r ex1-solution}
+ggplot(clinical_data, aes(x = AGE)) +
+  geom_histogram(binwidth = 5, fill = "steelblue", color = "white", alpha = 0.8) +
+  labs(
+    title = "Distribution of age at diagnosis",
+    x     = "Age at diagnosis (years)",
+    y     = "Number of patients"
+  )
+```
+:::
+
+## Exercise 2: Overall survival by pathological stage
+
+Create a violin plot showing the distribution of overall survival time (in months)
+for each pathological T-stage.
+
+**Hints:**
+
+- Look at `geom_violin()` in the `ggplot2` documentation.
+- Add a `geom_jitter()` layer on top to show individual data points.
+- The relevant columns are `PATH_T_STAGE` and `OS_MONTHS`.
+
+```{r ex2, eval=FALSE}
+# Your code here
+
+```
+
+::: {.callout-tip collapse="true"}
+## Solution
+
+```{r ex2-solution}
+ggplot(clinical_data, aes(x = PATH_T_STAGE, y = OS_MONTHS)) +
+  geom_violin(fill = "lightblue", alpha = 0.6) +
+  geom_jitter(width = 0.15, alpha = 0.4, size = 0.8) +
+  labs(
+    title = "Overall survival by pathological T-stage",
+    x     = "Pathological T-stage",
+    y     = "Overall survival (months)"
+  )
+```
+
+Notice how the violin plot reveals the shape of the distribution within each stage,
+while the jittered points show the actual density of observations.
+:::
+
+## Exercise 3 (optional): Kaplan–Meier survival curves
+
+::: {.callout-note collapse="true"}
+## Going deeper: survival analysis
+
+If you are familiar with survival analysis, try plotting Kaplan–Meier curves
+stratified by pathological stage using the `survminer` and `survival` packages.
+
+```{r ex3-solution, eval=FALSE}
+# install.packages(c("survival", "survminer"))
+library(survival)
+library(survminer)
+
+# Create a survival object
+# OS_STATUS coding: check the data dictionary — typically 0 = alive, 1 = dead
+surv_obj <- Surv(time = clinical_data$OS_MONTHS,
+                 event = clinical_data$OS_STATUS == "DECEASED")
+
+# Fit KM curves by pathological stage
+km_fit <- survfit(surv_obj ~ PATH_T_STAGE, data = clinical_data)
+
+# Plot
+ggsurvplot(
+  km_fit,
+  data       = clinical_data,
+  risk.table = TRUE,
+  pval       = TRUE,
+  title      = "Kaplan–Meier survival by pathological T-stage"
+)
+```
+
+We will cover survival analysis in more detail in later sessions.
+:::
+
+---
+
+# Session Info
+
+```{r session_info}
+sessionInfo()
+```
