@@ -1,0 +1,198 @@
+[
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "AI in Clinical Research",
+    "section": "",
+    "text": "Benvenuto nel sito del modulo Laboratorio di Intelligenza Artificiale applicata agli Studi Clinici."
+  },
+  {
+    "objectID": "index.html#struttura-del-corso",
+    "href": "index.html#struttura-del-corso",
+    "title": "AI in Clinical Research",
+    "section": "Struttura del corso",
+    "text": "Struttura del corso\nIl corso è articolato in tre sessioni da 4 ore, ciascuna composta da una parte teorica e una pratica."
+  },
+  {
+    "objectID": "index.html#materiale",
+    "href": "index.html#materiale",
+    "title": "AI in Clinical Research",
+    "section": "Materiale",
+    "text": "Materiale\nIl materiale dei laboratori è disponibile nel menu Labs in alto."
+  },
+  {
+    "objectID": "labs/lab1a-intro-r.html",
+    "href": "labs/lab1a-intro-r.html",
+    "title": "Introduction to R",
+    "section": "",
+    "text": "This document is written in Quarto, the next-generation version of R Markdown. Quarto documents mix prose, code, and output in a single file, and can be rendered to HTML, PDF, or Word. You are reading the HTML output.\nEach grey box below is an R code chunk. When you render the document, R executes each chunk in order and embeds the output directly beneath it. You can also run chunks interactively in RStudio by clicking the green arrow on the top-right of each chunk.\n\n# This is a code chunk. Run it to see the output below.\nsummary(cars)\n\n     speed           dist       \n Min.   : 4.0   Min.   :  2.00  \n 1st Qu.:12.0   1st Qu.: 26.00  \n Median :15.0   Median : 36.00  \n Mean   :15.4   Mean   : 42.98  \n 3rd Qu.:19.0   3rd Qu.: 56.00  \n Max.   :25.0   Max.   :120.00  \n\n\n\n\n\n\n\n\nTipHow to use this document\n\n\n\nThe sections marked Core cover the material we will go through together in the lab session. Sections inside collapsible boxes marked Going deeper are additional material for you to explore at your own pace after the session."
+  },
+  {
+    "objectID": "labs/lab1a-intro-r.html#logical",
+    "href": "labs/lab1a-intro-r.html#logical",
+    "title": "Introduction to R",
+    "section": "\n2.1 Logical",
+    "text": "2.1 Logical\nLogical values are TRUE or FALSE. They arise naturally from comparisons and conditions, and are the backbone of filtering and subsetting data.\n\n# Create a logical vector\nl &lt;- c(TRUE, FALSE, TRUE)\nl\n\n[1]  TRUE FALSE  TRUE\n\n\n\ntypeof(l)\n\n[1] \"logical\"\n\nmode(l)\n\n[1] \"logical\"\n\nclass(l)\n\n[1] \"logical\""
+  },
+  {
+    "objectID": "labs/lab1a-intro-r.html#integer",
+    "href": "labs/lab1a-intro-r.html#integer",
+    "title": "Introduction to R",
+    "section": "\n2.2 Integer",
+    "text": "2.2 Integer\nIntegers are whole numbers, stored more efficiently than decimals. In R they are written with a trailing L. You will encounter them most often as counts or indices.\n\n# Create an integer vector\ni &lt;- c(1L, 2L, 3L)\ni\n\n[1] 1 2 3\n\n\n\ntypeof(i)\n\n[1] \"integer\"\n\nmode(i)\n\n[1] \"numeric\"\n\nclass(i)\n\n[1] \"integer\""
+  },
+  {
+    "objectID": "labs/lab1a-intro-r.html#double",
+    "href": "labs/lab1a-intro-r.html#double",
+    "title": "Introduction to R",
+    "section": "\n2.3 Double",
+    "text": "2.3 Double\nDoubles (also called numeric in R) are real numbers with decimal precision. Most continuous measurements — age, weight, expression values, survival time — are doubles.\n\n# Create a double vector\nd &lt;- c(1.0, 2.5, 3.7)\nd\n\n[1] 1.0 2.5 3.7\n\n\n\ntypeof(d)\n\n[1] \"double\"\n\nmode(d)\n\n[1] \"numeric\"\n\nclass(d)\n\n[1] \"numeric\""
+  },
+  {
+    "objectID": "labs/lab1a-intro-r.html#character",
+    "href": "labs/lab1a-intro-r.html#character",
+    "title": "Introduction to R",
+    "section": "\n2.4 Character",
+    "text": "2.4 Character\nCharacter values (strings) hold text. They are used for labels, patient IDs, gene names, and any categorical variable before it is converted to a factor.\n\n# Create a character vector\nc.v &lt;- c(\"a\", \"b\", \"c\")\nc.v\n\n[1] \"a\" \"b\" \"c\"\n\n\n\ntypeof(c.v)\n\n[1] \"character\"\n\nmode(c.v)\n\n[1] \"character\"\n\nclass(c.v)\n\n[1] \"character\""
+  },
+  {
+    "objectID": "labs/lab1a-intro-r.html#less-common-types",
+    "href": "labs/lab1a-intro-r.html#less-common-types",
+    "title": "Introduction to R",
+    "section": "Less common types",
+    "text": "Less common types\n\n\n\n\n\n\nNoteGoing deeper: complex and raw types\n\n\n\n\n\nThese two types rarely appear in biomedical data analysis, but are included here for completeness.\nComplex numbers have a real and an imaginary part (written a + bi). They arise in signal processing and certain mathematical transformations (e.g. Fourier analysis).\n\ncpx &lt;- c(1+2i, 3+4i, 5+6i)\ncpx\n\n[1] 1+2i 3+4i 5+6i\n\ntypeof(cpx)\n\n[1] \"complex\"\n\n\nRaw values store binary data as bytes. You might encounter them when reading binary file formats or network data.\n\nr &lt;- as.raw(c(1, 2, 3))\nr\n\n[1] 01 02 03\n\ntypeof(r)\n\n[1] \"raw\""
+  },
+  {
+    "objectID": "labs/lab1a-intro-r.html#vectors",
+    "href": "labs/lab1a-intro-r.html#vectors",
+    "title": "Introduction to R",
+    "section": "\n3.1 Vectors",
+    "text": "3.1 Vectors\nA vector is a one-dimensional, ordered collection of values all of the same type. It is the fundamental building block in R — a single number is actually a vector of length 1.\n\n3.1.1 Create\n\n# Combine values with c()\nv &lt;- c(1, 2, 3, 4, 5)\nv\n\n[1] 1 2 3 4 5\n\n\n\n# Regular sequence with seq()\nv &lt;- seq(from = 1, to = 10, by = 2)\nv\n\n[1] 1 3 5 7 9\n\n\n\n# Repeated pattern with rep()\nv &lt;- rep(x = 1:3, times = 2)\nv\n\n[1] 1 2 3 1 2 3\n\n\n\n# Random sample (set.seed() makes the result reproducible)\nset.seed(42)\nv &lt;- sample(x = 1:10, size = 5, replace = FALSE)\nv\n\n[1]  1  5 10  8  2\n\n\n\n\n\n\n\n\nTipReproducibility tip\n\n\n\nUse set.seed() before any function that involves randomness. This ensures that anyone running your code will get the same result — essential for reproducible research.\n\n\n\n3.1.2 Inspect\n\ntypeof(v)\n\n[1] \"integer\"\n\nclass(v)\n\n[1] \"integer\"\n\nlength(v)\n\n[1] 5\n\n\nElements are accessed with square bracket indexing []. R uses 1-based indexing (the first element is [1], not [0] as in Python).\n\nv[1]        # first element\n\n[1] 1\n\nv[1:3]      # elements 1 to 3\n\n[1]  1  5 10\n\n\nVectors can also have names, allowing access by label:\n\nnames(v) &lt;- c(\"a\", \"b\", \"c\", \"d\", \"e\")\nv[\"a\"]\n\na \n1 \n\n\n\n3.1.3 Modify\n\nv &lt;- c(v, 6)         # append an element\nv\n\n a  b  c  d  e    \n 1  5 10  8  2  6 \n\n\n\nv &lt;- v[-1]           # remove first element\nv\n\n b  c  d  e    \n 5 10  8  2  6 \n\n\n\nv[1] &lt;- 10           # overwrite first element\nv\n\n b  c  d  e    \n10 10  8  2  6"
+  },
+  {
+    "objectID": "labs/lab1a-intro-r.html#matrices",
+    "href": "labs/lab1a-intro-r.html#matrices",
+    "title": "Introduction to R",
+    "section": "\n3.2 Matrices",
+    "text": "3.2 Matrices\nA matrix is a two-dimensional, homogeneous structure — essentially a vector with rows and columns. Matrices are common in bioinformatics: gene expression data is often stored as a matrix with genes on rows and samples on columns.\n\n3.2.1 Create\n\nm &lt;- matrix(\n  data  = 1:9,\n  nrow  = 3,\n  ncol  = 3,\n  byrow = FALSE    # fill column by column (default)\n)\nm\n\n     [,1] [,2] [,3]\n[1,]    1    4    7\n[2,]    2    5    8\n[3,]    3    6    9\n\n\nA matrix can also be created by assigning dimensions to a vector with dim():\n\nv2 &lt;- 1:9\ndim(v2) &lt;- c(3, 3)\nidentical(m, v2)   # TRUE: the two objects are the same\n\n[1] TRUE\n\n\n\n3.2.2 Inspect\nElements are indexed by [row, col]. Leaving one dimension blank selects everything in that dimension.\n\nm[2, 1]          # element at row 2, column 1\n\n[1] 2\n\nm[1:2, ]         # first two rows, all columns\n\n     [,1] [,2] [,3]\n[1,]    1    4    7\n[2,]    2    5    8\n\n\nNamed indexing also works for matrices:\n\nrownames(m) &lt;- c(\"a\", \"b\", \"c\")\ncolnames(m) &lt;- c(\"d\", \"e\", \"f\")\nm[\"a\", \"d\"]\n\n[1] 1\n\n\n\ndim(m)     # returns c(nrows, ncols)\n\n[1] 3 3\n\n\n\n3.2.3 Modify\n\nm &lt;- rbind(m, c(10, 11, 12))   # add a row\nm &lt;- m[-4, ]                   # remove 4th row\nm &lt;- cbind(m, c(13, 14, 15))   # add a column\nm &lt;- m[, -4]                   # remove 4th column\nm[1, 1] &lt;- 10                  # modify one element\nm\n\n   d e f\na 10 4 7\nb  2 5 8\nc  3 6 9"
+  },
+  {
+    "objectID": "labs/lab1a-intro-r.html#lists",
+    "href": "labs/lab1a-intro-r.html#lists",
+    "title": "Introduction to R",
+    "section": "\n3.3 Lists",
+    "text": "3.3 Lists\nA list is a one-dimensional, heterogeneous structure: each element can be of any type, including another list. Lists are how R represents complex objects such as the output of a statistical model.\n\n3.3.1 Create\n\nl &lt;- list(\n  name   = \"John\",\n  age    = 30,\n  height = 1.75\n)\nl\n\n$name\n[1] \"John\"\n\n$age\n[1] 30\n\n$height\n[1] 1.75\n\n\n\n3.3.2 Inspect\nLists support three types of subsetting, with subtly different results:\n\nl[1]       # returns a list of length 1\n\n$name\n[1] \"John\"\n\nl[[1]]     # returns the element itself\n\n[1] \"John\"\n\nl$name     # same as l[[\"name\"]], using the element name\n\n[1] \"John\"\n\n\n\nlength(l)\n\n[1] 3\n\n\n\n3.3.3 Modify\n\nl &lt;- c(l, list(weight = 70))   # add an element\nl$height &lt;- NULL               # remove an element\nl$name &lt;- \"Jane\"               # modify an element\nl\n\n$name\n[1] \"Jane\"\n\n$age\n[1] 30\n\n$weight\n[1] 70\n\n\n\n\n\n\n\n\nNoteGoing deeper: the [[ vs [ distinction\n\n\n\n\n\n[ always returns a list (the container), while [[ returns the element inside. This matters when passing list elements to functions:\n\n# These two calls behave differently\nclass(l[1])    # \"list\"\n\n[1] \"list\"\n\nclass(l[[1]])  # \"character\"\n\n[1] \"character\"\n\n\nMost functions expect the element itself, not a list containing it — so [[ and $ are more commonly useful when working with list contents."
+  },
+  {
+    "objectID": "labs/lab1a-intro-r.html#data-frames",
+    "href": "labs/lab1a-intro-r.html#data-frames",
+    "title": "Introduction to R",
+    "section": "\n3.4 Data frames",
+    "text": "3.4 Data frames\nA data frame is the central data structure for tabular data in R. It is a two-dimensional, heterogeneous structure: a collection of vectors of equal length, each potentially of a different type. Each row represents an observation (e.g. a patient) and each column a variable (e.g. age, sex, diagnosis).\n\n3.4.1 Create\n\ndf &lt;- data.frame(\n  patientid = 1:3,\n  sex       = c(\"M\", \"F\", \"M\"),\n  age       = c(34, 41, 57)\n)\ndf\n\n  patientid sex age\n1         1   M  34\n2         2   F  41\n3         3   M  57\n\n\n\n3.4.2 Inspect\nThree functions cover most inspection needs:\n\nhead(df)       # first 6 rows\n\n  patientid sex age\n1         1   M  34\n2         2   F  41\n3         3   M  57\n\nstr(df)        # structure: column types and a preview of values\n\n'data.frame':   3 obs. of  3 variables:\n $ patientid: int  1 2 3\n $ sex      : chr  \"M\" \"F\" \"M\"\n $ age      : num  34 41 57\n\nsummary(df)    # statistical summary per column\n\n   patientid       sex                 age      \n Min.   :1.0   Length:3           Min.   :34.0  \n 1st Qu.:1.5   Class :character   1st Qu.:37.5  \n Median :2.0   Mode  :character   Median :41.0  \n Mean   :2.0                      Mean   :44.0  \n 3rd Qu.:2.5                      3rd Qu.:49.0  \n Max.   :3.0                      Max.   :57.0  \n\n\n\n3.4.3 Modify\n\n# Add a column\ndf$height &lt;- c(1.75, 1.68, 1.80)\ndf\n\n  patientid sex age height\n1         1   M  34   1.75\n2         2   F  41   1.68\n3         3   M  57   1.80\n\n# Remove a column\ndf$height &lt;- NULL\ndf\n\n  patientid sex age\n1         1   M  34\n2         2   F  41\n3         3   M  57\n\n# Add a row — use data.frame() to preserve types\ndf &lt;- rbind(df, data.frame(patientid = 4, sex = \"F\", age = 51))\ndf\n\n  patientid sex age\n1         1   M  34\n2         2   F  41\n3         3   M  57\n4         4   F  51\n\n\n\n\n\n\n\n\nWarningType coercion trap\n\n\n\nAvoid using c() to create new rows for a data frame. Because c() coerces everything to the most general type in the vector, numeric columns will be silently converted to character:\n\n# This coerces patientid and age to character — probably not what you want\ndf_bad &lt;- rbind(df, c(5, \"M\", 28))\nstr(df_bad)\n\n'data.frame':   5 obs. of  3 variables:\n $ patientid: chr  \"1\" \"2\" \"3\" \"4\" ...\n $ sex      : chr  \"M\" \"F\" \"M\" \"F\" ...\n $ age      : chr  \"34\" \"41\" \"57\" \"51\" ..."
+  },
+  {
+    "objectID": "labs/lab1a-intro-r.html#factors",
+    "href": "labs/lab1a-intro-r.html#factors",
+    "title": "Introduction to R",
+    "section": "\n3.5 Factors",
+    "text": "3.5 Factors\nFactors represent categorical variables with a fixed set of possible values (called levels). They are important for statistical modelling — if you include sex or tumour stage in a regression, R needs to know they are categories, not arbitrary numbers or strings.\n\n3.5.1 Create\n\nf &lt;- factor(\n  c(\"M\", \"F\", \"M\"),\n  levels = c(\"M\", \"F\")\n)\nf\n\n[1] M F M\nLevels: M F\n\n\n\n3.5.2 Inspect\n\nlevels(f)       # the possible categories\n\n[1] \"M\" \"F\"\n\ntable(f)        # frequency of each level\n\nf\nM F \n2 1 \n\nsummary(f)      # similar to table() for factors\n\nM F \n2 1 \n\nstr(f)          # internal representation (integers + levels)\n\n Factor w/ 2 levels \"M\",\"F\": 1 2 1\n\n\n\n\n\n\n\n\nWarningas.numeric() on factors\n\n\n\nas.numeric() returns the underlying integer codes (1, 2, 3…), not the level labels. This is a common source of errors. To get numeric values from a factor whose labels are numbers, use as.numeric(as.character(f)).\n\nf2 &lt;- factor(c(\"10\", \"20\", \"30\"))\nas.numeric(f2)              # returns 1 2 3 — WRONG\n\n[1] 1 2 3\n\nas.numeric(as.character(f2)) # returns 10 20 30 — correct\n\n[1] 10 20 30\n\n\n\n\n\n3.5.3 Modify\n\nlevels(f) &lt;- c(levels(f), \"U\")   # add a level\nf &lt;- droplevels(f)               # remove unused levels\nf\n\n[1] M F M\nLevels: M F"
+  },
+  {
+    "objectID": "labs/lab1a-intro-r.html#create-5",
+    "href": "labs/lab1a-intro-r.html#create-5",
+    "title": "Introduction to R",
+    "section": "\n4.1 Create",
+    "text": "4.1 Create\n\nmyfun &lt;- function(x, y) {\n  result &lt;- x + y\n  return(result)\n}"
+  },
+  {
+    "objectID": "labs/lab1a-intro-r.html#inspect-5",
+    "href": "labs/lab1a-intro-r.html#inspect-5",
+    "title": "Introduction to R",
+    "section": "\n4.2 Inspect",
+    "text": "4.2 Inspect\n\nformals(myfun)      # the argument list\n\n$x\n\n\n$y\n\nbody(myfun)         # the code inside\n\n{\n    result &lt;- x + y\n    return(result)\n}"
+  },
+  {
+    "objectID": "labs/lab1a-intro-r.html#call",
+    "href": "labs/lab1a-intro-r.html#call",
+    "title": "Introduction to R",
+    "section": "\n4.3 Call",
+    "text": "4.3 Call\nArguments can be passed by position or by name. Using names makes code more readable and prevents errors when a function has many arguments.\n\nmyfun(4, 6)             # by position\n\n[1] 10\n\nmyfun(x = 4, y = 6)    # by name (preferred)\n\n[1] 10"
+  },
+  {
+    "objectID": "labs/lab1a-intro-r.html#save-and-load-r-objects",
+    "href": "labs/lab1a-intro-r.html#save-and-load-r-objects",
+    "title": "Introduction to R",
+    "section": "\n5.1 Save and load R objects",
+    "text": "5.1 Save and load R objects\nsave() and load() preserve R objects in their native binary format (.RData). This is useful for caching intermediate results in a long analysis.\n\nsave(df, file = \"data.RData\")\nload(file = \"data.RData\")"
+  },
+  {
+    "objectID": "labs/lab1a-intro-r.html#read-and-write-csv",
+    "href": "labs/lab1a-intro-r.html#read-and-write-csv",
+    "title": "Introduction to R",
+    "section": "\n5.2 Read and write CSV",
+    "text": "5.2 Read and write CSV\nCSV is the most portable format for sharing data between R and other tools.\n\n# Write\nwrite.csv(df, file = \"data.csv\", row.names = FALSE)\n\n# Read\ndf &lt;- read.csv(file = \"data.csv\")\n\n\n\n\n\n\n\nNoteGoing deeper: the readr and data.table packages\n\n\n\n\n\nBase R’s read.csv() is fine for small files. For larger datasets (hundreds of thousands of rows), consider:\n\n\nreadr::read_csv() from the tidyverse: faster than base R, better type guessing, and returns a tibble instead of a plain data frame.\n\ndata.table::fread(): extremely fast for very large files.\n\nBoth packages need to be installed once with install.packages() before use."
+  },
+  {
+    "objectID": "labs/lab1b-working-with-data.html",
+    "href": "labs/lab1b-working-with-data.html",
+    "title": "Working with Data",
+    "section": "",
+    "text": "In this lab we will work with a real clinical dataset from a prostate cancer cohort. By the end of the session you will be able to:\n\nimport a tabular dataset into R\nexplore its structure and contents\ncreate basic visualisations with ggplot2\n\nsave your plots to disk\n\nWe introduce ggplot2 here as a practical tool. In later labs we will use it extensively, so it is worth getting comfortable with its core syntax now."
+  },
+  {
+    "objectID": "labs/lab1b-working-with-data.html#project-structure",
+    "href": "labs/lab1b-working-with-data.html#project-structure",
+    "title": "Working with Data",
+    "section": "\n2.1 Project structure",
+    "text": "2.1 Project structure\nThis lab assumes you are working inside the course RStudio project. The project uses the here package to construct file paths relative to the project root, so the code works regardless of where you have saved the project on your computer.\nIf you do not have here or ggplot2 installed, run the chunk below once:\n\ninstall.packages(c(\"here\", \"ggplot2\"))\n\n\nlibrary(here)\nlibrary(ggplot2)"
+  },
+  {
+    "objectID": "labs/lab1b-working-with-data.html#the-here-package",
+    "href": "labs/lab1b-working-with-data.html#the-here-package",
+    "title": "Working with Data",
+    "section": "\n2.2 The here package",
+    "text": "2.2 The here package\nhere::here() always returns the path to the project root, no matter which subfolder your .qmd file is in. For example:\n\n# Shows the project root on your machine\nhere::here()\n\n[1] \"/Users/alessandrobarberis/Work/Software/Teaching/ai-clinical-research\"\n\n\nAll file paths in this document are built with here(), so you never need to adjust them manually."
+  },
+  {
+    "objectID": "labs/lab1b-working-with-data.html#about-the-data",
+    "href": "labs/lab1b-working-with-data.html#about-the-data",
+    "title": "Working with Data",
+    "section": "\n3.1 About the data",
+    "text": "3.1 About the data\nWe use clinical data from the Prostate Adenocarcinoma cohort of The Cancer Genome Atlas (TCGA), as curated in the TCGA PanCancer Atlas 2018. This cohort includes 499 patients with matched genomic and clinical data.\ncBioPortal is an open-access platform that provides interactive exploration of large-scale cancer genomics datasets. It is widely used in translational oncology research and is a key resource you will encounter throughout this master."
+  },
+  {
+    "objectID": "labs/lab1b-working-with-data.html#download-the-data",
+    "href": "labs/lab1b-working-with-data.html#download-the-data",
+    "title": "Working with Data",
+    "section": "\n3.2 Download the data",
+    "text": "3.2 Download the data\n\nGo to the TCGA Prostate Cancer study page on cBioPortal.\nClick Download.\nUnzip the downloaded archive and move the folder prad_tcga_pan_can_atlas_2018/ into the data/ folder of the course project.\n\nThe file we need is data_clinical_patient.txt inside that folder.\n\n\n\n\n\n\nNote\n\n\n\nThe dataset is already available in the data/ folder if you downloaded the full course materials from GitHub."
+  },
+  {
+    "objectID": "labs/lab1b-working-with-data.html#scatter-plot-age-vs.-follow-up-duration",
+    "href": "labs/lab1b-working-with-data.html#scatter-plot-age-vs.-follow-up-duration",
+    "title": "Working with Data",
+    "section": "\n6.1 Scatter plot: age vs. follow-up duration",
+    "text": "6.1 Scatter plot: age vs. follow-up duration\n\nggplot(clinical_data, aes(x = AGE, y = DAYS_LAST_FOLLOWUP)) +\n  geom_point(alpha = 0.5) +\n  labs(\n    title = \"Age at diagnosis vs. days to last follow-up\",\n    x     = \"Age at diagnosis (years)\",\n    y     = \"Days to last follow-up\"\n  )\n\n\n\n\n\n\n\nThis plot shows the relationship between age at diagnosis and the length of follow-up. Each point is one patient. The alpha argument controls point transparency, which helps reveal overplotted regions."
+  },
+  {
+    "objectID": "labs/lab1b-working-with-data.html#exercise-1-distribution-of-age-at-diagnosis",
+    "href": "labs/lab1b-working-with-data.html#exercise-1-distribution-of-age-at-diagnosis",
+    "title": "Working with Data",
+    "section": "\n8.1 Exercise 1: Distribution of age at diagnosis",
+    "text": "8.1 Exercise 1: Distribution of age at diagnosis\nCreate a histogram showing the distribution of patient age at diagnosis.\nHint: look at the ggplot2 documentation for geom_histogram(). Try adjusting the binwidth argument to see how it affects the plot.\n\n# Your code here\n\n\n\n\n\n\n\nTipSolution\n\n\n\n\n\n\nggplot(clinical_data, aes(x = AGE)) +\n  geom_histogram(binwidth = 5, fill = \"steelblue\", color = \"white\", alpha = 0.8) +\n  labs(\n    title = \"Distribution of age at diagnosis\",\n    x     = \"Age at diagnosis (years)\",\n    y     = \"Number of patients\"\n  )"
+  },
+  {
+    "objectID": "labs/lab1b-working-with-data.html#exercise-2-overall-survival-by-pathological-stage",
+    "href": "labs/lab1b-working-with-data.html#exercise-2-overall-survival-by-pathological-stage",
+    "title": "Working with Data",
+    "section": "\n8.2 Exercise 2: Overall survival by pathological stage",
+    "text": "8.2 Exercise 2: Overall survival by pathological stage\nCreate a violin plot showing the distribution of overall survival time (in months) for each pathological T-stage.\nHints:\n\nLook at geom_violin() in the ggplot2 documentation.\nAdd a geom_jitter() layer on top to show individual data points.\nThe relevant columns are PATH_T_STAGE and OS_MONTHS.\n\n\n# Your code here\n\n\n\n\n\n\n\nTipSolution\n\n\n\n\n\n\nggplot(clinical_data, aes(x = PATH_T_STAGE, y = OS_MONTHS)) +\n  geom_violin(fill = \"lightblue\", alpha = 0.6) +\n  geom_jitter(width = 0.15, alpha = 0.4, size = 0.8) +\n  labs(\n    title = \"Overall survival by pathological T-stage\",\n    x     = \"Pathological T-stage\",\n    y     = \"Overall survival (months)\"\n  )\n\n\n\n\n\n\n\nNotice how the violin plot reveals the shape of the distribution within each stage, while the jittered points show the actual density of observations."
+  },
+  {
+    "objectID": "labs/lab1b-working-with-data.html#exercise-3-optional-kaplanmeier-survival-curves",
+    "href": "labs/lab1b-working-with-data.html#exercise-3-optional-kaplanmeier-survival-curves",
+    "title": "Working with Data",
+    "section": "\n8.3 Exercise 3 (optional): Kaplan–Meier survival curves",
+    "text": "8.3 Exercise 3 (optional): Kaplan–Meier survival curves\n\n\n\n\n\n\nNoteGoing deeper: survival analysis\n\n\n\n\n\nIf you are familiar with survival analysis, try plotting Kaplan–Meier curves stratified by pathological stage using the survminer and survival packages.\n\n# install.packages(c(\"survival\", \"survminer\"))\nlibrary(survival)\nlibrary(survminer)\n\n# Create a survival object\n# OS_STATUS coding: check the data dictionary — typically 0 = alive, 1 = dead\nsurv_obj &lt;- Surv(time = clinical_data$OS_MONTHS,\n                 event = clinical_data$OS_STATUS == \"DECEASED\")\n\n# Fit KM curves by pathological stage\nkm_fit &lt;- survfit(surv_obj ~ PATH_T_STAGE, data = clinical_data)\n\n# Plot\nggsurvplot(\n  km_fit,\n  data       = clinical_data,\n  risk.table = TRUE,\n  pval       = TRUE,\n  title      = \"Kaplan–Meier survival by pathological T-stage\"\n)\n\nWe will cover survival analysis in more detail in later sessions."
+  }
+]

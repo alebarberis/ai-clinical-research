@@ -33,8 +33,7 @@ summary(cars)
 
 ::: {.callout-tip}
 ## How to use this document
-The sections marked **Core** cover the material we will go through together in the
-lab session. Sections inside collapsible boxes marked **Going deeper** are additional
+Sections inside collapsible boxes marked **Going deeper** are additional
 material for you to explore at your own pace after the session.
 :::
 
