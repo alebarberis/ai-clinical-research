@@ -1,31 +1,10 @@
 [
   {
-    "objectID": "index.html",
-    "href": "index.html",
-    "title": "AI in Clinical Research",
-    "section": "",
-    "text": "Benvenuto nel sito del modulo Laboratorio di Intelligenza Artificiale applicata agli Studi Clinici."
-  },
-  {
-    "objectID": "index.html#struttura-del-corso",
-    "href": "index.html#struttura-del-corso",
-    "title": "AI in Clinical Research",
-    "section": "Struttura del corso",
-    "text": "Struttura del corso\nIl corso è articolato in tre sessioni da 4 ore, ciascuna composta da una parte teorica e una pratica."
-  },
-  {
-    "objectID": "index.html#materiale",
-    "href": "index.html#materiale",
-    "title": "AI in Clinical Research",
-    "section": "Materiale",
-    "text": "Materiale\nIl materiale dei laboratori è disponibile nel menu Labs in alto."
-  },
-  {
     "objectID": "labs/lab1a-intro-r.html",
     "href": "labs/lab1a-intro-r.html",
     "title": "Introduction to R",
     "section": "",
-    "text": "This document is written in Quarto, the next-generation version of R Markdown. Quarto documents mix prose, code, and output in a single file, and can be rendered to HTML, PDF, or Word. You are reading the HTML output.\nEach grey box below is an R code chunk. When you render the document, R executes each chunk in order and embeds the output directly beneath it. You can also run chunks interactively in RStudio by clicking the green arrow on the top-right of each chunk.\n\n# This is a code chunk. Run it to see the output below.\nsummary(cars)\n\n     speed           dist       \n Min.   : 4.0   Min.   :  2.00  \n 1st Qu.:12.0   1st Qu.: 26.00  \n Median :15.0   Median : 36.00  \n Mean   :15.4   Mean   : 42.98  \n 3rd Qu.:19.0   3rd Qu.: 56.00  \n Max.   :25.0   Max.   :120.00  \n\n\n\n\n\n\n\n\nTipHow to use this document\n\n\n\nThe sections marked Core cover the material we will go through together in the lab session. Sections inside collapsible boxes marked Going deeper are additional material for you to explore at your own pace after the session."
+    "text": "This document is written in Quarto, the next-generation version of R Markdown. Quarto documents mix prose, code, and output in a single file, and can be rendered to HTML, PDF, or Word. You are reading the HTML output.\nEach grey box below is an R code chunk. When you render the document, R executes each chunk in order and embeds the output directly beneath it. You can also run chunks interactively in RStudio by clicking the green arrow on the top-right of each chunk.\n\n# This is a code chunk. Run it to see the output below.\nsummary(cars)\n\n     speed           dist       \n Min.   : 4.0   Min.   :  2.00  \n 1st Qu.:12.0   1st Qu.: 26.00  \n Median :15.0   Median : 36.00  \n Mean   :15.4   Mean   : 42.98  \n 3rd Qu.:19.0   3rd Qu.: 56.00  \n Max.   :25.0   Max.   :120.00  \n\n\n\n\n\n\n\n\nTipHow to use this document\n\n\n\nSections inside collapsible boxes marked Going deeper are additional material for you to explore at your own pace after the session."
   },
   {
     "objectID": "labs/lab1a-intro-r.html#logical",
@@ -133,6 +112,27 @@
     "text": "5.2 Read and write CSV\nCSV is the most portable format for sharing data between R and other tools.\n\n# Write\nwrite.csv(df, file = \"data.csv\", row.names = FALSE)\n\n# Read\ndf &lt;- read.csv(file = \"data.csv\")\n\n\n\n\n\n\n\nNoteGoing deeper: the readr and data.table packages\n\n\n\n\n\nBase R’s read.csv() is fine for small files. For larger datasets (hundreds of thousands of rows), consider:\n\n\nreadr::read_csv() from the tidyverse: faster than base R, better type guessing, and returns a tibble instead of a plain data frame.\n\ndata.table::fread(): extremely fast for very large files.\n\nBoth packages need to be installed once with install.packages() before use."
   },
   {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "AI in Clinical Research",
+    "section": "",
+    "text": "Benvenuto nel sito del modulo Laboratorio di Intelligenza Artificiale applicata agli Studi Clinici."
+  },
+  {
+    "objectID": "index.html#struttura-del-corso",
+    "href": "index.html#struttura-del-corso",
+    "title": "AI in Clinical Research",
+    "section": "Struttura del corso",
+    "text": "Struttura del corso\nIl corso è articolato in tre sessioni da 4 ore, ciascuna composta da una parte teorica e una pratica."
+  },
+  {
+    "objectID": "index.html#materiale",
+    "href": "index.html#materiale",
+    "title": "AI in Clinical Research",
+    "section": "Materiale",
+    "text": "Materiale\nIl materiale dei laboratori è disponibile nel menu Labs in alto."
+  },
+  {
     "objectID": "labs/lab1b-working-with-data.html",
     "href": "labs/lab1b-working-with-data.html",
     "title": "Working with Data",
@@ -151,7 +151,7 @@
     "href": "labs/lab1b-working-with-data.html#the-here-package",
     "title": "Working with Data",
     "section": "\n2.2 The here package",
-    "text": "2.2 The here package\nhere::here() always returns the path to the project root, no matter which subfolder your .qmd file is in. For example:\n\n# Shows the project root on your machine\nhere::here()\n\n[1] \"/Users/alessandrobarberis/Work/Software/Teaching/ai-clinical-research\"\n\n\nAll file paths in this document are built with here(), so you never need to adjust them manually."
+    "text": "2.2 The here package\nhere::here() always returns the path to the project root, no matter which subfolder your .qmd file is in. For example:\n\n# Shows the project root on your machine\nhere::here()\n\n[1] \"/home/runner/work/ai-clinical-research/ai-clinical-research\"\n\n\nAll file paths in this document are built with here(), so you never need to adjust them manually."
   },
   {
     "objectID": "labs/lab1b-working-with-data.html#about-the-data",
