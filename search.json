@@ -1,89 +1,5 @@
 [
   {
-    "objectID": "index.html",
-    "href": "index.html",
-    "title": "AI in Clinical Research",
-    "section": "",
-    "text": "Benvenuto nel sito del modulo Laboratorio di Intelligenza Artificiale applicata agli Studi Clinici."
-  },
-  {
-    "objectID": "index.html#struttura-del-corso",
-    "href": "index.html#struttura-del-corso",
-    "title": "AI in Clinical Research",
-    "section": "Struttura del corso",
-    "text": "Struttura del corso\nIl corso è articolato in tre sessioni da 4 ore, ciascuna composta da una parte teorica e una pratica."
-  },
-  {
-    "objectID": "index.html#materiale",
-    "href": "index.html#materiale",
-    "title": "AI in Clinical Research",
-    "section": "Materiale",
-    "text": "Materiale\nIl materiale dei laboratori è disponibile nel menu Labs in alto."
-  },
-  {
-    "objectID": "labs/lab1b-working-with-data.html",
-    "href": "labs/lab1b-working-with-data.html",
-    "title": "Working with Data",
-    "section": "",
-    "text": "In this lab we will work with a real clinical dataset from a prostate cancer cohort. By the end of the session you will be able to:\n\nimport a tabular dataset into R\nexplore its structure and contents\ncreate basic visualisations with ggplot2\n\nsave your plots to disk\n\nWe introduce ggplot2 here as a practical tool. In later labs we will use it extensively, so it is worth getting comfortable with its core syntax now."
-  },
-  {
-    "objectID": "labs/lab1b-working-with-data.html#project-structure",
-    "href": "labs/lab1b-working-with-data.html#project-structure",
-    "title": "Working with Data",
-    "section": "\n2.1 Project structure",
-    "text": "2.1 Project structure\nThis lab assumes you are working inside the course RStudio project. The project uses the here package to construct file paths relative to the project root, so the code works regardless of where you have saved the project on your computer.\nIf you do not have here or ggplot2 installed, run the chunk below once:\n\ninstall.packages(c(\"here\", \"ggplot2\"))\n\n\nlibrary(here)\nlibrary(ggplot2)"
-  },
-  {
-    "objectID": "labs/lab1b-working-with-data.html#the-here-package",
-    "href": "labs/lab1b-working-with-data.html#the-here-package",
-    "title": "Working with Data",
-    "section": "\n2.2 The here package",
-    "text": "2.2 The here package\nhere::here() always returns the path to the project root, no matter which subfolder your .qmd file is in. For example:\n\n# Shows the project root on your machine\nhere::here()\n\n[1] \"/Users/alessandrobarberis/Work/Software/Teaching/ai-clinical-research\"\n\n\nAll file paths in this document are built with here(), so you never need to adjust them manually."
-  },
-  {
-    "objectID": "labs/lab1b-working-with-data.html#about-the-data",
-    "href": "labs/lab1b-working-with-data.html#about-the-data",
-    "title": "Working with Data",
-    "section": "\n3.1 About the data",
-    "text": "3.1 About the data\nWe use clinical data from the Prostate Adenocarcinoma cohort of The Cancer Genome Atlas (TCGA), as curated in the TCGA PanCancer Atlas 2018. This cohort includes 499 patients with matched genomic and clinical data.\ncBioPortal is an open-access platform that provides interactive exploration of large-scale cancer genomics datasets. It is widely used in translational oncology research and is a key resource you will encounter throughout this master."
-  },
-  {
-    "objectID": "labs/lab1b-working-with-data.html#download-the-data",
-    "href": "labs/lab1b-working-with-data.html#download-the-data",
-    "title": "Working with Data",
-    "section": "\n3.2 Download the data",
-    "text": "3.2 Download the data\n\nGo to the TCGA Prostate Cancer study page on cBioPortal.\nClick Download.\nUnzip the downloaded archive and move the folder prad_tcga_pan_can_atlas_2018/ into the data/ folder of the course project.\n\nThe file we need is data_clinical_patient.txt inside that folder.\n\n\n\n\n\n\nNote\n\n\n\nThe dataset is already available in the data/ folder if you downloaded the full course materials from GitHub."
-  },
-  {
-    "objectID": "labs/lab1b-working-with-data.html#scatter-plot-age-vs.-follow-up-duration",
-    "href": "labs/lab1b-working-with-data.html#scatter-plot-age-vs.-follow-up-duration",
-    "title": "Working with Data",
-    "section": "\n6.1 Scatter plot: age vs. follow-up duration",
-    "text": "6.1 Scatter plot: age vs. follow-up duration\n\nggplot(clinical_data, aes(x = AGE, y = DAYS_LAST_FOLLOWUP)) +\n  geom_point(alpha = 0.5) +\n  labs(\n    title = \"Age at diagnosis vs. days to last follow-up\",\n    x     = \"Age at diagnosis (years)\",\n    y     = \"Days to last follow-up\"\n  )\n\n\n\n\n\n\n\nThis plot shows the relationship between age at diagnosis and the length of follow-up. Each point is one patient. The alpha argument controls point transparency, which helps reveal overplotted regions."
-  },
-  {
-    "objectID": "labs/lab1b-working-with-data.html#exercise-1-distribution-of-age-at-diagnosis",
-    "href": "labs/lab1b-working-with-data.html#exercise-1-distribution-of-age-at-diagnosis",
-    "title": "Working with Data",
-    "section": "\n8.1 Exercise 1: Distribution of age at diagnosis",
-    "text": "8.1 Exercise 1: Distribution of age at diagnosis\nCreate a histogram showing the distribution of patient age at diagnosis.\nHint: look at the ggplot2 documentation for geom_histogram(). Try adjusting the binwidth argument to see how it affects the plot.\n\n# Your code here\n\n\n\n\n\n\n\nTipSolution\n\n\n\n\n\n\nggplot(clinical_data, aes(x = AGE)) +\n  geom_histogram(binwidth = 5, fill = \"steelblue\", color = \"white\", alpha = 0.8) +\n  labs(\n    title = \"Distribution of age at diagnosis\",\n    x     = \"Age at diagnosis (years)\",\n    y     = \"Number of patients\"\n  )"
-  },
-  {
-    "objectID": "labs/lab1b-working-with-data.html#exercise-2-overall-survival-by-pathological-stage",
-    "href": "labs/lab1b-working-with-data.html#exercise-2-overall-survival-by-pathological-stage",
-    "title": "Working with Data",
-    "section": "\n8.2 Exercise 2: Overall survival by pathological stage",
-    "text": "8.2 Exercise 2: Overall survival by pathological stage\nCreate a violin plot showing the distribution of overall survival time (in months) for each pathological T-stage.\nHints:\n\nLook at geom_violin() in the ggplot2 documentation.\nAdd a geom_jitter() layer on top to show individual data points.\nThe relevant columns are PATH_T_STAGE and OS_MONTHS.\n\n\n# Your code here\n\n\n\n\n\n\n\nTipSolution\n\n\n\n\n\n\nggplot(clinical_data, aes(x = PATH_T_STAGE, y = OS_MONTHS)) +\n  geom_violin(fill = \"lightblue\", alpha = 0.6) +\n  geom_jitter(width = 0.15, alpha = 0.4, size = 0.8) +\n  labs(\n    title = \"Overall survival by pathological T-stage\",\n    x     = \"Pathological T-stage\",\n    y     = \"Overall survival (months)\"\n  )\n\n\n\n\n\n\n\nNotice how the violin plot reveals the shape of the distribution within each stage, while the jittered points show the actual density of observations."
-  },
-  {
-    "objectID": "labs/lab1b-working-with-data.html#exercise-3-optional-kaplanmeier-survival-curves",
-    "href": "labs/lab1b-working-with-data.html#exercise-3-optional-kaplanmeier-survival-curves",
-    "title": "Working with Data",
-    "section": "\n8.3 Exercise 3 (optional): Kaplan–Meier survival curves",
-    "text": "8.3 Exercise 3 (optional): Kaplan–Meier survival curves\n\n\n\n\n\n\nNoteGoing deeper: survival analysis\n\n\n\n\n\nIf you are familiar with survival analysis, try plotting Kaplan–Meier curves stratified by pathological stage using the survminer and survival packages.\n\n# install.packages(c(\"survival\", \"survminer\"))\nlibrary(survival)\nlibrary(survminer)\n\n# Create a survival object\n# OS_STATUS coding: check the data dictionary — typically 0 = alive, 1 = dead\nsurv_obj &lt;- Surv(time = clinical_data$OS_MONTHS,\n                 event = clinical_data$OS_STATUS == \"DECEASED\")\n\n# Fit KM curves by pathological stage\nkm_fit &lt;- survfit(surv_obj ~ PATH_T_STAGE, data = clinical_data)\n\n# Plot\nggsurvplot(\n  km_fit,\n  data       = clinical_data,\n  risk.table = TRUE,\n  pval       = TRUE,\n  title      = \"Kaplan–Meier survival by pathological T-stage\"\n)\n\nWe will cover survival analysis in more detail in later sessions."
-  },
-  {
     "objectID": "labs/lab1a-intro-r.html",
     "href": "labs/lab1a-intro-r.html",
     "title": "Introduction to R",
@@ -194,6 +110,90 @@
     "title": "Introduction to R",
     "section": "\n5.2 Read and write CSV",
     "text": "5.2 Read and write CSV\nCSV is the most portable format for sharing data between R and other tools.\n\n# Write\nwrite.csv(df, file = \"data.csv\", row.names = FALSE)\n\n# Read\ndf &lt;- read.csv(file = \"data.csv\")\n\n\n\n\n\n\n\nNoteGoing deeper: the readr and data.table packages\n\n\n\n\n\nBase R’s read.csv() is fine for small files. For larger datasets (hundreds of thousands of rows), consider:\n\n\nreadr::read_csv() from the tidyverse: faster than base R, better type guessing, and returns a tibble instead of a plain data frame.\n\ndata.table::fread(): extremely fast for very large files.\n\nBoth packages need to be installed once with install.packages() before use."
+  },
+  {
+    "objectID": "labs/lab1b-working-with-data.html",
+    "href": "labs/lab1b-working-with-data.html",
+    "title": "Working with Data",
+    "section": "",
+    "text": "In this lab we will work with a real clinical dataset from a prostate cancer cohort. By the end of the session you will be able to:\n\nimport a tabular dataset into R\nexplore its structure and contents\ncreate basic visualisations with ggplot2\n\nsave your plots to disk\n\nWe introduce ggplot2 here as a practical tool. In later labs we will use it extensively, so it is worth getting comfortable with its core syntax now."
+  },
+  {
+    "objectID": "labs/lab1b-working-with-data.html#project-structure",
+    "href": "labs/lab1b-working-with-data.html#project-structure",
+    "title": "Working with Data",
+    "section": "\n2.1 Project structure",
+    "text": "2.1 Project structure\nThis lab assumes you are working inside the course RStudio project. The project uses the here package to construct file paths relative to the project root, so the code works regardless of where you have saved the project on your computer.\nIf you do not have here or ggplot2 installed, run the chunk below once:\n\ninstall.packages(c(\"here\", \"ggplot2\"))\n\n\nlibrary(here)\nlibrary(ggplot2)"
+  },
+  {
+    "objectID": "labs/lab1b-working-with-data.html#the-here-package",
+    "href": "labs/lab1b-working-with-data.html#the-here-package",
+    "title": "Working with Data",
+    "section": "\n2.2 The here package",
+    "text": "2.2 The here package\nhere::here() always returns the path to the project root, no matter which subfolder your .qmd file is in. For example:\n\n# Shows the project root on your machine\nhere::here()\n\n[1] \"/home/runner/work/ai-clinical-research/ai-clinical-research\"\n\n\nAll file paths in this document are built with here(), so you never need to adjust them manually."
+  },
+  {
+    "objectID": "labs/lab1b-working-with-data.html#about-the-data",
+    "href": "labs/lab1b-working-with-data.html#about-the-data",
+    "title": "Working with Data",
+    "section": "\n3.1 About the data",
+    "text": "3.1 About the data\nWe use clinical data from the Prostate Adenocarcinoma cohort of The Cancer Genome Atlas (TCGA), as curated in the TCGA PanCancer Atlas 2018. This cohort includes 499 patients with matched genomic and clinical data.\ncBioPortal is an open-access platform that provides interactive exploration of large-scale cancer genomics datasets. It is widely used in translational oncology research and is a key resource you will encounter throughout this master."
+  },
+  {
+    "objectID": "labs/lab1b-working-with-data.html#download-the-data",
+    "href": "labs/lab1b-working-with-data.html#download-the-data",
+    "title": "Working with Data",
+    "section": "\n3.2 Download the data",
+    "text": "3.2 Download the data\n\nGo to the TCGA Prostate Cancer study page on cBioPortal.\nClick Download.\nUnzip the downloaded archive and move the folder prad_tcga_pan_can_atlas_2018/ into the data/ folder of the course project.\n\nThe file we need is data_clinical_patient.txt inside that folder.\n\n\n\n\n\n\nNote\n\n\n\nThe dataset is already available in the data/ folder if you downloaded the full course materials from GitHub."
+  },
+  {
+    "objectID": "labs/lab1b-working-with-data.html#scatter-plot-age-vs.-follow-up-duration",
+    "href": "labs/lab1b-working-with-data.html#scatter-plot-age-vs.-follow-up-duration",
+    "title": "Working with Data",
+    "section": "\n6.1 Scatter plot: age vs. follow-up duration",
+    "text": "6.1 Scatter plot: age vs. follow-up duration\n\nggplot(clinical_data, aes(x = AGE, y = DAYS_LAST_FOLLOWUP)) +\n  geom_point(alpha = 0.5) +\n  labs(\n    title = \"Age at diagnosis vs. days to last follow-up\",\n    x     = \"Age at diagnosis (years)\",\n    y     = \"Days to last follow-up\"\n  )\n\n\n\n\n\n\n\nThis plot shows the relationship between age at diagnosis and the length of follow-up. Each point is one patient. The alpha argument controls point transparency, which helps reveal overplotted regions."
+  },
+  {
+    "objectID": "labs/lab1b-working-with-data.html#exercise-1-distribution-of-age-at-diagnosis",
+    "href": "labs/lab1b-working-with-data.html#exercise-1-distribution-of-age-at-diagnosis",
+    "title": "Working with Data",
+    "section": "\n8.1 Exercise 1: Distribution of age at diagnosis",
+    "text": "8.1 Exercise 1: Distribution of age at diagnosis\nCreate a histogram showing the distribution of patient age at diagnosis.\nHint: look at the ggplot2 documentation for geom_histogram(). Try adjusting the binwidth argument to see how it affects the plot.\n\n# Your code here\n\n\n\n\n\n\n\nTipSolution\n\n\n\n\n\n\nggplot(clinical_data, aes(x = AGE)) +\n  geom_histogram(binwidth = 5, fill = \"steelblue\", color = \"white\", alpha = 0.8) +\n  labs(\n    title = \"Distribution of age at diagnosis\",\n    x     = \"Age at diagnosis (years)\",\n    y     = \"Number of patients\"\n  )"
+  },
+  {
+    "objectID": "labs/lab1b-working-with-data.html#exercise-2-overall-survival-by-pathological-stage",
+    "href": "labs/lab1b-working-with-data.html#exercise-2-overall-survival-by-pathological-stage",
+    "title": "Working with Data",
+    "section": "\n8.2 Exercise 2: Overall survival by pathological stage",
+    "text": "8.2 Exercise 2: Overall survival by pathological stage\nCreate a violin plot showing the distribution of overall survival time (in months) for each pathological T-stage.\nHints:\n\nLook at geom_violin() in the ggplot2 documentation.\nAdd a geom_jitter() layer on top to show individual data points.\nThe relevant columns are PATH_T_STAGE and OS_MONTHS.\n\n\n# Your code here\n\n\n\n\n\n\n\nTipSolution\n\n\n\n\n\n\nggplot(clinical_data, aes(x = PATH_T_STAGE, y = OS_MONTHS)) +\n  geom_violin(fill = \"lightblue\", alpha = 0.6) +\n  geom_jitter(width = 0.15, alpha = 0.4, size = 0.8) +\n  labs(\n    title = \"Overall survival by pathological T-stage\",\n    x     = \"Pathological T-stage\",\n    y     = \"Overall survival (months)\"\n  )\n\n\n\n\n\n\n\nNotice how the violin plot reveals the shape of the distribution within each stage, while the jittered points show the actual density of observations."
+  },
+  {
+    "objectID": "labs/lab1b-working-with-data.html#exercise-3-optional-kaplanmeier-survival-curves",
+    "href": "labs/lab1b-working-with-data.html#exercise-3-optional-kaplanmeier-survival-curves",
+    "title": "Working with Data",
+    "section": "\n8.3 Exercise 3 (optional): Kaplan–Meier survival curves",
+    "text": "8.3 Exercise 3 (optional): Kaplan–Meier survival curves\n\n\n\n\n\n\nNoteGoing deeper: survival analysis\n\n\n\n\n\nIf you are familiar with survival analysis, try plotting Kaplan–Meier curves stratified by pathological stage using the survminer and survival packages.\n\n# install.packages(c(\"survival\", \"survminer\"))\nlibrary(survival)\nlibrary(survminer)\n\n# Create a survival object\n# OS_STATUS coding: check the data dictionary — typically 0 = alive, 1 = dead\nsurv_obj &lt;- Surv(time = clinical_data$OS_MONTHS,\n                 event = clinical_data$OS_STATUS == \"DECEASED\")\n\n# Fit KM curves by pathological stage\nkm_fit &lt;- survfit(surv_obj ~ PATH_T_STAGE, data = clinical_data)\n\n# Plot\nggsurvplot(\n  km_fit,\n  data       = clinical_data,\n  risk.table = TRUE,\n  pval       = TRUE,\n  title      = \"Kaplan–Meier survival by pathological T-stage\"\n)\n\nWe will cover survival analysis in more detail in later sessions."
+  },
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "AI in Clinical Research",
+    "section": "",
+    "text": "Benvenuto nel sito del modulo Laboratorio di Intelligenza Artificiale applicata agli Studi Clinici."
+  },
+  {
+    "objectID": "index.html#struttura-del-corso",
+    "href": "index.html#struttura-del-corso",
+    "title": "AI in Clinical Research",
+    "section": "Struttura del corso",
+    "text": "Struttura del corso\nIl corso è articolato in tre sessioni da 4 ore, ciascuna composta da una parte teorica e una pratica."
+  },
+  {
+    "objectID": "index.html#materiale",
+    "href": "index.html#materiale",
+    "title": "AI in Clinical Research",
+    "section": "Materiale",
+    "text": "Materiale\nIl materiale dei laboratori è disponibile nel menu Labs in alto."
   },
   {
     "objectID": "labs/lab2a-unsupervised-dimensionality-reduction.html",
