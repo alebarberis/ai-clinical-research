@@ -1,0 +1,1181 @@
+---
+title: "Unsupervised Learning: Dimensionality Reduction"
+author: "Alessandro Barberis"
+date: last-modified
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-fold: false
+    highlight-style: github
+    theme: cosmo
+execute:
+  warning: false
+  message: false
+---
+
+# Objective
+
+In this tutorial, we will explore several **dimensionality reduction** methods. High-dimensional data are common in biology and medicine — for example, gene expression matrices with thousands of features, or clinical datasets with hundreds of variables. Dimensionality reduction techniques allow us to represent such data in a lower-dimensional space, making it easier to **visualise**, **explore**, and understand the underlying structure.
+
+We will cover four methods:
+
+- **Principal Component Analysis (PCA)** — a linear method based on eigendecomposition of the covariance matrix.
+- **Classical Multidimensional Scaling (MDS)** — a linear method based on eigendecomposition of a distance matrix.
+- **t-SNE** — a non-linear, stochastic method optimised for 2D/3D visualisation.
+- **UMAP** — a non-linear method that is faster than t-SNE and better preserves global structure.
+
+We will first apply these methods to **synthetic data** to understand their mechanics, and then to a real-world **breast cancer** dataset.
+
+# Setup
+
+## Seed
+
+Before running the tutorial, we set a seed for the random number generator (RNG). Different R sessions produce different seeds by default (derived from the current time and process ID), leading to different results for any stochastic operation. By fixing a seed we ensure **reproducibility**.
+
+```{r setup_seed}
+set.seed(
+  seed        = 5381L,              # a fixed integer seed
+  kind        = "Mersenne-Twister", # current R default RNG
+  normal.kind = "Inversion"         # current R default normal generator
+)
+```
+
+# Libraries
+
+We will use the following R packages. Make sure they are installed before running the tutorial.
+
+```{r load_libraries}
+# File paths
+library(here)            # reproducible file paths
+
+# Base statistics
+library(stats)
+
+# Visualisation
+library(ggplot2)
+library(patchwork)       # combine multiple ggplots
+library(factoextra)      # PCA visualisation helpers
+library(ComplexHeatmap)  # heatmap of distance matrices
+library(circlize)        # color palettes for ComplexHeatmap
+library(RColorBrewer)    # additional color palettes
+
+# Dimensionality reduction methods
+library(Rtsne)  # t-SNE
+library(uwot)   # UMAP
+```
+
+::: {.callout-tip}
+## Package installation
+
+If any package is missing, install it with:
+
+```r
+# CRAN packages
+install.packages(c("here", "ggplot2", "patchwork", "factoextra",
+                   "circlize", "RColorBrewer", "Rtsne", "uwot"))
+
+# Bioconductor
+if (!require("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+BiocManager::install("ComplexHeatmap")
+```
+:::
+
+# Synthetic Data
+
+We start with **synthetic data** — a simple random matrix — to understand the mechanics of each method before applying them to a real dataset.
+
+## Data Generation
+
+We generate a matrix `X` with `n = 100` observations (rows) and `p = 20` features (columns). Each entry is drawn independently from a $\mathcal{N}(3, 2)$ distribution — that is, with **mean 3** and **standard deviation 2**. We deliberately choose a non-zero mean and a scale different from 1 so that the effect of standardization will be clearly visible in the next step.
+
+```{r synth_generate}
+set.seed(5381L)
+
+n <- 100  # number of observations
+p <- 20   # number of features
+
+X <- matrix(
+  data = rnorm(n * p, mean = 3, sd = 2),
+  nrow = n,
+  ncol = p,
+  dimnames = list(
+    paste0("obs", seq_len(n)),
+    paste0("var", seq_len(p))
+  )
+)
+```
+
+Because all entries share the same distribution, there is **no true structure** in this dataset. This is useful as a baseline: we can verify that our methods do not "hallucinate" patterns where none exist, while still having data that are not already standardized.
+
+## Normalization
+
+In practice, features often have different scales (e.g., gene expression vs. age vs. body weight). To avoid any single feature dominating the analysis, we **standardize** each column to have zero mean and unit standard deviation using `scale()`.
+
+```{r synth_normalize}
+Z <- scale(
+  x      = X,     # input matrix
+  center = TRUE,  # subtract the column mean from each column
+  scale  = TRUE   # divide each column by its standard deviation
+)
+```
+
+We can verify the result by inspecting the column means and standard deviations before and after standardization:
+
+```{r synth_check_normalization}
+# Before: column means and SDs of X
+cat("X  — mean of col means:", round(mean(colMeans(X)), 4),
+    " | mean of col SDs:", round(mean(apply(X, 2, sd)), 4), "\n")
+
+# After: column means and SDs of Z
+cat("Z  — mean of col means:", round(mean(colMeans(Z)), 4),
+    " | mean of col SDs:", round(mean(apply(Z, 2, sd)), 4), "\n")
+```
+
+We can also visualise the effect of standardization on a single feature by comparing the two density curves:
+
+```{r synth_density_plot, fig.width=8, fig.height=4}
+df_raw  <- data.frame(value = X[, 1], type = "Original (X)")
+df_std  <- data.frame(value = Z[, 1], type = "Standardized (Z)")
+df_plot <- rbind(df_raw, df_std)
+
+ggplot(df_plot, aes(x = value, fill = type)) +
+  geom_density(alpha = 0.5) +
+  facet_wrap(~type, scales = "free_x") +
+  labs(
+    title    = "Density of feature 1 before and after standardization",
+    x        = "Value",
+    y        = "Density"
+  ) +
+  theme_bw() +
+  theme(legend.position = "none")
+```
+
+The two panels illustrate the key effect of standardization:
+
+- **Left panel (Original)**: the density is centered around 3 (our chosen mean) and spread over a range of roughly ±6 units (reflecting the SD of 2).
+- **Right panel (Standardized)**: the density is now centered at **0** and has unit variance, so the bulk of the distribution falls within ±2–3. The *shape* of the distribution is unchanged — only its location and scale have been transformed.
+
+This shift is important: without standardization, features with larger numerical ranges (e.g., a feature measured in hundreds vs. one measured in ones) would dominate distance calculations and, consequently, dimensionality reduction and clustering results.
+
+::: {.callout-caution icon="false"}
+## ✏️ Exercise 1: Verify standardization
+
+Compute and print the **standard deviation** of each column in `Z`. Verify that all values are equal (or very close) to 1.
+
+*Hint*: use `apply(Z, 2, sd)`.
+:::
+
+::: {.callout-tip collapse="true" icon="false"}
+## 💡 Solution
+
+```{r ex1_solution}
+# Standard deviation of each column of Z
+col_sds <- apply(Z, 2, sd)
+
+# All should be 1
+round(col_sds, 10)
+
+# Summary check
+summary(col_sds)
+```
+:::
+
+## Principal Component Analysis (PCA)
+
+**PCA** finds a new set of orthogonal axes — the **principal components** (PCs) — that capture the maximum variance in the data. The first PC points in the direction of greatest variance, the second PC captures the most of the remaining variance while being orthogonal to the first, and so on.
+
+### Mathematical Background
+
+Mathematically, PCA computes the **eigendecomposition** of the **covariance matrix** $\mathbf{C}$ of the centered (and optionally scaled) data:
+
+$$\mathbf{C} = \frac{1}{n-1} \mathbf{Z}^\top \mathbf{Z}$$
+
+The eigendecomposition of $\mathbf{C}$ yields:
+
+$$\mathbf{C} \mathbf{v}_k = \lambda_k \mathbf{v}_k$$
+
+where:
+
+- $\lambda_k$ is the $k$-th **eigenvalue**: it represents the **variance captured** by the $k$-th principal component. Larger eigenvalues correspond to PCs that explain more of the total variance.
+- $\mathbf{v}_k$ is the $k$-th **eigenvector** (also called a **loading vector**): it defines the **direction** of the $k$-th PC in the original feature space. The coefficients of $\mathbf{v}_k$ (one per original feature) describe how much each feature contributes to that PC.
+
+The **PC scores** — i.e. the coordinates of each observation in the new PC space — are obtained by projecting the data onto the eigenvectors:
+
+$$\mathbf{T} = \mathbf{Z} \mathbf{V}$$
+
+where $\mathbf{V}$ is the matrix whose columns are the eigenvectors. In R, the scores are stored in `pca_result$x` and the loadings in `pca_result$rotation`.
+
+### Computing PCA
+
+We use `prcomp()` from the `stats` package. We can either pass the raw data `X` and let `prcomp` center and scale internally, or pass the pre-standardized matrix `Z` directly.
+
+```{r synth_pca_raw}
+# PCA on raw data X — centering and scaling done internally
+pca_result <- stats::prcomp(
+  x      = X,
+  retx   = TRUE,  # return rotated variables (scores)
+  center = TRUE,  # subtract column means
+  scale. = TRUE   # divide by column SDs
+)
+```
+
+```{r synth_pca_z}
+# PCA on pre-standardized data Z — no internal centering/scaling needed
+pca_result_z <- stats::prcomp(
+  x      = Z,
+  retx   = TRUE,
+  center = FALSE,
+  scale. = FALSE
+)
+```
+
+Since `prcomp(X, center=TRUE, scale.=TRUE)` is equivalent to `prcomp(Z, center=FALSE, scale.=FALSE)`, the two rotation matrices should be identical (up to possible sign flips):
+
+```{r synth_pca_equivalence}
+# Check whether the rotation matrices are identical
+all.equal(
+  abs(pca_result$rotation),
+  abs(pca_result_z$rotation)
+)
+```
+
+::: {.callout-note}
+## Why can rotations differ by sign?
+
+Eigenvectors are defined only **up to sign**: if **v** is an eigenvector of a matrix, then so is **−v**. Different implementations may return eigenvectors with opposite signs, resulting in axis reflections. This does not affect the geometry of the projection — only the orientation of the axes.
+:::
+
+### Proportion of Explained Variance
+
+A key output of PCA is the **scree plot**, which shows how much variance each PC explains. With random data, we expect the explained variance to be distributed roughly evenly across all components (no single PC dominates):
+
+```{r synth_pca_scree, fig.width=7, fig.height=4}
+factoextra::fviz_eig(
+  X         = pca_result,
+  addlabels = TRUE,
+  ncp       = 10,
+  main      = "Scree Plot — Synthetic Data"
+) +
+  theme_bw()
+```
+
+The scree plot shows the percentage of total variance explained by each PC. With random data, we expect no single PC to dominate — the explained variance should be spread roughly evenly across components. This is exactly what we observe: each of the first 10 PCs explains only around 5–7% of the variance, and there is no clear "elbow" in the curve. This confirms the absence of any dominant structure in the data.
+
+### 2D Projection
+
+We project the data onto the first two PCs and visualise the result:
+
+```{r synth_pca_scatter, fig.width=6, fig.height=5}
+pca_scores <- as.data.frame(pca_result$x[, 1:2])
+colnames(pca_scores) <- c("PC1", "PC2")
+
+# Extract % variance explained for axis labels
+var_pct <- round(summary(pca_result)$importance["Proportion of Variance", 1:2] * 100, 1)
+
+ggplot(pca_scores, aes(x = PC1, y = PC2)) +
+  geom_point(color = "steelblue", size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 0, linetype = 2, color = "grey60") +
+  geom_hline(yintercept = 0, linetype = 2, color = "grey60") +
+  labs(
+    title = "PCA Projection — Synthetic Data",
+    x     = paste0("PC1 (", var_pct[1], "%)"),
+    y     = paste0("PC2 (", var_pct[2], "%)")
+  ) +
+  theme_bw()
+```
+
+As expected, the data appear uniformly scattered with no obvious cluster structure — consistent with our i.i.d. generation.
+
+### Biplot
+
+A **biplot** overlays both the sample scores and the variable loadings in the same plot. It shows how much each original variable contributes to the first two PCs:
+
+```{r synth_pca_biplot, fig.width=7, fig.height=6}
+factoextra::fviz_pca_biplot(
+  X          = pca_result,
+  geom.ind   = "point",
+  col.ind    = "steelblue",
+  col.var    = "tomato",
+  repel      = TRUE,
+  title      = "Biplot — Synthetic Data"
+) +
+  theme_bw()
+```
+
+In a biplot, two layers of information are displayed simultaneously:
+
+- **Points** (blue) represent the individual observations, projected onto the first two PCs — the same coordinates seen in the 2D projection above.
+- **Arrows** (red) represent the original variables. Each arrow is a **loading vector**: its direction indicates how that variable relates to the two PCs, and its **length** reflects the variable's contribution to the 2D subspace. A longer arrow means the variable is well represented in this 2D view; a shorter arrow may indicate that the variable contributes more to other PCs.
+- **Angle between arrows**: two arrows pointing in nearly the same direction indicate positively correlated variables; arrows pointing in opposite directions indicate negative correlation; perpendicular arrows suggest uncorrelated variables.
+
+With synthetic random data, the arrows tend to point in various directions with no dominant alignment — consistent with the absence of real correlations among variables.
+
+::: {.callout-caution icon="false"}
+## ✏️ Exercise 2: Variable contributions
+
+Extract the loadings (rotation matrix) for PC1 and PC2 from `pca_result$rotation`. Create a bar plot showing the **contribution** of each variable to PC1.
+
+*Hint*: `pca_result$rotation[, "PC1"]` gives the PC1 loadings.
+:::
+
+::: {.callout-tip collapse="true" icon="false"}
+## 💡 Solution
+
+```{r ex2_solution, fig.width=7, fig.height=4}
+# Extract PC1 loadings
+loadings_pc1 <- pca_result$rotation[, "PC1"]
+
+# Create a data frame for plotting
+df_load <- data.frame(
+  variable = names(loadings_pc1),
+  loading  = loadings_pc1
+)
+df_load$variable <- factor(df_load$variable, levels = df_load$variable)
+
+ggplot(df_load, aes(x = variable, y = loading, fill = loading > 0)) +
+  geom_col() +
+  scale_fill_manual(values = c("TRUE" = "steelblue", "FALSE" = "tomato"),
+                    guide = "none") +
+  labs(
+    title = "PC1 Loadings — Synthetic Data",
+    x     = "Variable",
+    y     = "Loading"
+  ) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Inspect the range of loading values: they are all small (typically between −0.3 and +0.3) and of mixed sign, with no variable standing out clearly above the others. This is the expected behaviour for random data: since no variable carries more information than any other, PCA distributes its "attention" roughly uniformly. In real datasets with meaningful structure, you would instead see a few variables with notably larger loadings, indicating that they drive the first PC and therefore capture the most discriminative signal.
+:::
+
+## Classical Multidimensional Scaling (MDS)
+
+**Classical MDS** (also called **Principal Coordinates Analysis**, PCoA) recovers a low-dimensional embedding that preserves the **pairwise distances** between observations as faithfully as possible. The key idea is to find coordinates in a $k$-dimensional space such that the Euclidean distances in that space approximate the original distances.
+
+Mathematically, classical MDS applies eigendecomposition to the **doubly-centered distance matrix** $\mathbf{B} = -\frac{1}{2} \mathbf{H} \mathbf{D}^{(2)} \mathbf{H}$, where $\mathbf{D}^{(2)}$ contains squared distances and $\mathbf{H}$ is the centering matrix. The eigenvectors of $\mathbf{B}$, scaled by the square roots of the corresponding eigenvalues, give the coordinates of the observations in the low-dimensional space.
+
+When the input distances are **Euclidean**, classical MDS is mathematically equivalent to PCA on the centered data — both methods produce the same configuration of points (up to rotation and reflection).
+
+### Step 1: Compute the Distance Matrix
+
+We start by computing the pairwise Euclidean distances between all observations in the standardized feature space:
+
+```{r synth_mds_dist}
+D  <- stats::dist(x = Z, method = "euclidean")  # 'dist' object
+D_matrix <- as.matrix(D)                         # full n×n matrix
+```
+
+We can visualise the pairwise distance matrix as a heatmap:
+
+```{r synth_mds_heatmap, fig.width=6, fig.height=5}
+ComplexHeatmap::Heatmap(
+  matrix         = D_matrix,
+  col            = circlize::colorRamp2(
+    breaks = seq(0, max(D_matrix), length.out = 4),
+    colors = c("white", RColorBrewer::brewer.pal(n = 3, name = "Reds"))
+  ),
+  name           = "Distance",
+  cluster_rows   = FALSE,
+  cluster_columns = FALSE,
+  show_row_names = FALSE,
+  show_column_names = FALSE,
+  column_title   = "Pairwise Euclidean Distance Matrix"
+)
+```
+
+Each cell $(i, j)$ in the heatmap encodes the Euclidean distance between observation $i$ and observation $j$. The diagonal is always zero (distance from a point to itself). With random data and no underlying group structure, the heatmap should appear as a relatively uniform gradient without any block patterns — which is what we observe. In contrast, if the data contained clusters, we would expect to see **darker blocks along the diagonal** (observations within the same cluster are close to each other) and **lighter off-diagonal blocks** (observations from different clusters are far apart).
+
+### Step 2: Apply Classical MDS
+
+```{r synth_mds_compute}
+mds_result <- stats::cmdscale(
+  d   = D,     # distance structure
+  k   = 2,     # number of dimensions to return
+  eig = TRUE   # also return eigenvalues
+)
+```
+
+The argument `eig = TRUE` asks `cmdscale` to also return the eigenvalues of the doubly-centered distance matrix. The proportion of each eigenvalue to the total sum of positive eigenvalues is analogous to the proportion of variance explained in PCA.
+
+### Step 3: Visualise the Embedding
+
+```{r synth_mds_scatter, fig.width=6, fig.height=5}
+mds_coords <- as.data.frame(mds_result$points)
+colnames(mds_coords) <- c("Dim1", "Dim2")
+
+ggplot(mds_coords, aes(x = Dim1, y = Dim2)) +
+  geom_point(color = "steelblue", size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 0, linetype = 2, color = "grey60") +
+  geom_hline(yintercept = 0, linetype = 2, color = "grey60") +
+  labs(
+    title = "Classical MDS Embedding — Synthetic Data",
+    x     = "Component 1",
+    y     = "Component 2"
+  ) +
+  theme_bw()
+```
+
+As with PCA, the observations are uniformly scattered with no visible cluster structure. The two axes (Component 1 and Component 2) correspond to the directions that best preserve the pairwise distances from the original 20-dimensional space. Since the data are random, no two-dimensional subspace explains markedly more distance structure than any other.
+
+## PCA vs MDS
+
+We can compare the two projections side by side. When the input to MDS is the Euclidean distance matrix computed from the same standardized data used for PCA, the two embeddings should be **equivalent** (up to axis reflections):
+
+```{r synth_pca_vs_mds, fig.width=10, fig.height=4}
+# PCA plot
+p1 <- ggplot(pca_scores, aes(x = PC1, y = PC2)) +
+  geom_point(color = "darkgreen", size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 0, linetype = 2, color = "grey60") +
+  geom_hline(yintercept = 0, linetype = 2, color = "grey60") +
+  labs(title = "PCA", x = paste0("PC1 (", var_pct[1], "%)"), y = paste0("PC2 (", var_pct[2], "%)")) +
+  theme_bw()
+
+# MDS plot
+p2 <- ggplot(mds_coords, aes(x = Dim1, y = Dim2)) +
+  geom_point(color = "steelblue", size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 0, linetype = 2, color = "grey60") +
+  geom_hline(yintercept = 0, linetype = 2, color = "grey60") +
+  labs(title = "Classical MDS", x = "Component 1", y = "Component 2") +
+  theme_bw()
+
+p1 + p2
+```
+
+::: {.callout-note}
+## Sign ambiguity in PCA and MDS
+
+Both PCA and classical MDS rely on eigendecomposition of a symmetric matrix:
+
+- **PCA**: eigendecomposition of the covariance matrix of the centered data.
+- **Classical MDS**: eigendecomposition of the doubly-centered distance matrix.
+
+Since eigenvectors are defined only up to sign (if **v** is an eigenvector, so is **−v**), the two plots may appear **mirrored** along one or both axes. However, the **geometry is preserved**: relative distances between points remain identical.
+:::
+
+::: {.callout-caution icon="false"}
+## ✏️ Exercise 3: Non-Euclidean distances in MDS
+
+One advantage of MDS over PCA is that it can work with **any distance metric**, not just Euclidean. Repeat the MDS analysis using the **Manhattan distance** (`method = "manhattan"`) and compare the result with the Euclidean-based embedding.
+
+*Does the overall structure change significantly? Why or why not?*
+:::
+
+::: {.callout-tip collapse="true" icon="false"}
+## 💡 Solution
+
+```{r ex3_solution, fig.width=10, fig.height=4}
+# MDS with Manhattan distance
+D_man    <- stats::dist(x = Z, method = "manhattan")
+mds_man  <- stats::cmdscale(d = D_man, k = 2, eig = TRUE)
+mds_man_coords <- as.data.frame(mds_man$points)
+colnames(mds_man_coords) <- c("Dim1", "Dim2")
+
+p_eucl <- ggplot(mds_coords, aes(x = Dim1, y = Dim2)) +
+  geom_point(color = "steelblue", size = 2, alpha = 0.7) +
+  labs(title = "MDS — Euclidean", x = "Dim 1", y = "Dim 2") +
+  theme_bw()
+
+p_man <- ggplot(mds_man_coords, aes(x = Dim1, y = Dim2)) +
+  geom_point(color = "darkorchid", size = 2, alpha = 0.7) +
+  labs(title = "MDS — Manhattan", x = "Dim 1", y = "Dim 2") +
+  theme_bw()
+
+p_eucl + p_man
+```
+
+With purely random data, both distance metrics produce similar unstructured layouts. The two embeddings may differ in scale and orientation, but neither reveals any meaningful structure — as expected.
+:::
+
+## t-SNE
+
+**t-distributed Stochastic Neighbour Embedding (t-SNE)** is a non-linear dimensionality reduction technique designed specifically for **2D/3D visualisation**. Unlike PCA and MDS, t-SNE:
+
+- Models **local** neighbourhood structure: nearby points in high dimensions should remain nearby in the 2D embedding.
+- Uses a **t-distribution** in the low-dimensional space (vs. a Gaussian in high-dimensional space) to avoid the "crowding problem".
+- Is **stochastic**: running t-SNE twice with the same data but different seeds may produce different layouts.
+
+The key hyperparameter is **perplexity** ($\approx$ 5–50), which loosely controls the number of effective neighbours. Higher perplexity focuses more on global structure; lower perplexity on local structure.
+
+::: {.callout-warning}
+## t-SNE distances are NOT meaningful
+
+Unlike PCA or MDS, **distances between clusters in a t-SNE plot do not reflect true distances** in the high-dimensional space. t-SNE optimises local neighbourhood preservation, so the relative position of distant clusters can be arbitrary. Use t-SNE for **exploration**, not for quantitative distance comparisons.
+:::
+
+```{r synth_tsne}
+set.seed(5381L)
+
+tsne_result <- Rtsne::Rtsne(
+  X            = Z,             # input matrix (standardized)
+  dims         = 2,             # output dimensionality
+  perplexity   = 20,            # perplexity (must be < n/3)
+  max_iter     = 1000,          # number of iterations
+  check_duplicates = FALSE,     # skip duplicate check
+  verbose      = FALSE
+)
+
+tsne_coords <- as.data.frame(tsne_result$Y)
+colnames(tsne_coords) <- c("tSNE1", "tSNE2")
+```
+
+```{r synth_tsne_plot, fig.width=6, fig.height=5}
+ggplot(tsne_coords, aes(x = tSNE1, y = tSNE2)) +
+  geom_point(color = "tomato", size = 2, alpha = 0.7) +
+  labs(
+    title = "t-SNE Embedding — Synthetic Data",
+    x     = "t-SNE 1",
+    y     = "t-SNE 2"
+  ) +
+  theme_bw()
+```
+
+::: {.callout-caution icon="false"}
+## ✏️ Exercise 4: Effect of perplexity
+
+Run t-SNE three times using **perplexity = 5**, **perplexity = 15**, and **perplexity = 30**. Visualise the three embeddings side by side.
+
+*What do you observe? How does perplexity affect the shape of the embedding?*
+
+::: {.callout-warning}
+## Perplexity constraint
+
+`Rtsne` requires that **perplexity < n / 3**, where `n` is the number of observations. With `n = 100`, the maximum valid perplexity is approximately 33.
+:::
+:::
+
+::: {.callout-tip collapse="true" icon="false"}
+## 💡 Solution
+
+```{r ex4_solution, fig.width=12, fig.height=4}
+run_tsne <- function(Z, perp, seed = 5381L) {
+  set.seed(seed)
+  res <- Rtsne::Rtsne(
+    X = Z, dims = 2, perplexity = perp,
+    max_iter = 1000, check_duplicates = FALSE, verbose = FALSE
+  )
+  df <- as.data.frame(res$Y)
+  colnames(df) <- c("tSNE1", "tSNE2")
+  df$perplexity <- paste0("Perplexity = ", perp)
+  df
+}
+
+df_tsne_all <- do.call(rbind, lapply(c(5, 15, 30), run_tsne, Z = Z))
+df_tsne_all$perplexity <- factor(df_tsne_all$perplexity,
+                                  levels = paste0("Perplexity = ", c(5, 15, 30)))
+
+ggplot(df_tsne_all, aes(x = tSNE1, y = tSNE2)) +
+  geom_point(color = "tomato", size = 1.5, alpha = 0.7) +
+  facet_wrap(~perplexity, scales = "free") +
+  labs(title = "t-SNE — Effect of Perplexity (Synthetic Data)") +
+  theme_bw()
+```
+
+With random data, all three perplexity values produce similar amorphous clouds — no structure emerges regardless of the hyperparameter, confirming the absence of real clusters. On real structured data, lower perplexity tends to produce tighter, more fragmented clusters (emphasising local neighbourhoods), while higher perplexity produces smoother, more spread-out layouts (capturing more global context).
+:::
+
+## UMAP
+
+**Uniform Manifold Approximation and Projection (UMAP)** is another non-linear method. It is conceptually similar to t-SNE but:
+
+- Is significantly **faster**, especially on large datasets.
+- Better preserves **global structure** (the relative positions of distant clusters are more meaningful).
+- Is **deterministic** by default (given a fixed seed).
+
+Key hyperparameters:
+
+- **`n_neighbors`** (default 15): controls the balance between local and global structure. Small values focus on local neighbourhoods; large values capture more global context.
+- **`min_dist`** (default 0.1): controls how tightly points are packed in the embedding. Smaller values produce more clustered layouts.
+
+```{r synth_umap}
+set.seed(5381L)
+
+umap_result <- uwot::umap(
+  X           = Z,
+  n_components = 2,
+  n_neighbors  = 15,
+  min_dist     = 0.1
+)
+
+umap_coords <- as.data.frame(umap_result)
+colnames(umap_coords) <- c("UMAP1", "UMAP2")
+```
+
+```{r synth_umap_plot, fig.width=6, fig.height=5}
+ggplot(umap_coords, aes(x = UMAP1, y = UMAP2)) +
+  geom_point(color = "darkorchid", size = 2, alpha = 0.7) +
+  labs(
+    title = "UMAP Embedding — Synthetic Data",
+    x     = "UMAP 1",
+    y     = "UMAP 2"
+  ) +
+  theme_bw()
+```
+
+::: {.callout-caution icon="false"}
+## ✏️ Exercise 5: Effect of UMAP hyperparameters
+
+Run UMAP with three different values of `n_neighbors`: **5**, **15**, and **50**. Plot the results side by side and comment on how the embedding changes.
+:::
+
+::: {.callout-tip collapse="true" icon="false"}
+## 💡 Solution
+
+```{r ex5_solution, fig.width=12, fig.height=4}
+run_umap <- function(Z, nn, seed = 5381L) {
+  set.seed(seed)
+  res <- uwot::umap(Z, n_components = 2, n_neighbors = nn, min_dist = 0.1)
+  df  <- as.data.frame(res)
+  colnames(df) <- c("UMAP1", "UMAP2")
+  df$n_neighbors <- paste0("n_neighbors = ", nn)
+  df
+}
+
+df_umap_all <- do.call(rbind, lapply(c(5, 15, 50), run_umap, Z = Z))
+df_umap_all$n_neighbors <- factor(df_umap_all$n_neighbors,
+                                   levels = paste0("n_neighbors = ", c(5, 15, 50)))
+
+ggplot(df_umap_all, aes(x = UMAP1, y = UMAP2)) +
+  geom_point(color = "darkorchid", size = 1.5, alpha = 0.7) +
+  facet_wrap(~n_neighbors, scales = "free") +
+  labs(title = "UMAP — Effect of n_neighbors (Synthetic Data)") +
+  theme_bw()
+```
+
+With random data, changing `n_neighbors` has little effect on the overall unstructured appearance. On real, structured data, however, this parameter strongly influences whether local clusters or global relationships are more prominent.
+:::
+
+# Real Data
+
+## Breast Cancer Wisconsin Dataset
+
+For this tutorial, we use the [Breast Cancer Wisconsin (Original) dataset](https://archive.ics.uci.edu/dataset/15/breast+cancer+wisconsin+original) from the University of Wisconsin Hospitals.
+
+The data has been pre-processed and saved as an `.rda` file. We load it with:
+
+```{r load_data}
+load(file = here::here("data", "bcwo_data.rda"))
+```
+
+After executing the command, two objects should appear in your Environment: `x` (the feature matrix) and `y` (the outcome vector).
+
+### Dimensionality
+
+```{r data_dim}
+cat("x — rows:", nrow(x), " | columns:", ncol(x), "\n")
+cat("y — length:", length(y), " | levels:", paste(levels(y), collapse = ", "), "\n")
+```
+
+`x` has `r nrow(x)` observations and `r ncol(x)` features; `y` is a factor with `r length(y)` elements.
+
+### Features
+
+```{r data_head}
+head(x)
+```
+
+Nine cytological characteristics — assessed on a scale of 1 to 10 (10 = most malignant) from fine-needle aspirates (FNAs) — serve as predictors:
+
+| Feature | Description |
+|---------|-------------|
+| Clump Thickness | Thickness of cell clumps |
+| Uniformity of Cell Size | Size uniformity across cells |
+| Uniformity of Cell Shape | Shape uniformity across cells |
+| Marginal Adhesion | Cell adhesion to neighbouring cells |
+| Single Epithelial Cell Size | Size of individual epithelial cells |
+| Bare Nuclei | Nuclei without surrounding cytoplasm |
+| Bland Chromatin | Texture of nuclear chromatin |
+| Normal Nucleoli | Nucleoli visibility |
+| Mitoses | Mitotic activity |
+
+### Outcome Variable
+
+```{r data_y}
+table(y)
+```
+
+The outcome `y` indicates whether the tumour is **benign** or **malignant**.
+
+## Normalization
+
+As before, we standardize the features:
+
+```{r real_normalize}
+Z_real <- scale(x = x, center = TRUE, scale = TRUE)
+```
+
+Now we want to visualise the effect of standardization on a single feature by comparing the two density curves. In particular, we choose *Uniformity of Cell Size* since it's a feature known for its discriminative power:
+
+```{r real_density_plot, fig.width=8, fig.height=4}
+df_raw  <- data.frame(value = x[, 'cell_size'], type = "Original (X)")
+df_std  <- data.frame(value = Z_real[, 'cell_size'], type = "Standardized (Z)")
+df_plot <- rbind(df_raw, df_std)
+
+ggplot(df_plot, aes(x = value, fill = type)) +
+  geom_density(alpha = 0.5) +
+  geom_vline(
+    data = subset(df_plot, type == "Original (X)"), 
+    aes(xintercept = mean(x[, "cell_size"])), 
+    linetype = "dashed", 
+    color = "blue"
+  ) +
+  geom_vline(
+    data = subset(df_plot, type == "Standardized (Z)"), 
+    aes(xintercept = mean(Z_real[, "cell_size"])), 
+    linetype = "dashed", 
+    color = "red"
+  ) +
+  facet_wrap(~type, scales = "free_x") +
+  labs(
+    title    = "Density of 'Uniformity of Cell Size' before and after standardization",
+    x        = "Value",
+    y        = "Density"
+  ) +
+  theme_bw() +
+  theme(legend.position = "none")
+```
+
+Looking at the two density plots, there are several things that we can observe:
+
+- **Standardization changes the scale, not the shape**: the curve is shifted to mean 0 and stretched/compressed to standard deviation 1, but skewness and multimodality remain.
+- **The underlying biological measurement determines the shape**: these cytological scores are ordinal and often cluster differently for benign and malignant samples.
+- **Normalization does not make the data Gaussian**: the distribution can remain skewed or even bimodal after z‑scoring.
+- **The separation between classes can still be visible**: if benign and malignant values form two clusters, they remain two clusters (just rescaled).
+- **Algorithms care about scale, not about “bell shapes”**: standardization is mainly for distance‑based models (KNN, SVM, PCA), not for forcing normality.
+
+
+
+::: {.callout-caution icon="false"}
+## ✏️ Exercise 6: Compare distributions before and after standardization
+
+Pick three different features among the nine cytological measurements (e.g., Bare nuclei, Uniformity of cell size, Clump thickness).
+For each selected feature:
+
+1. Extract the raw values and their standardized counterparts.
+2. Plot the two density curves side by side (as done above).
+3. Add a vertical line marking the feature mean before and after standardization.
+4. Compare the shapes:
+   * Is the distribution skewed?
+   * Is it bimodal?
+   * Does standardization change any of these aspects?
+5. Explain why different features behave differently.
+
+:::
+
+::: {.callout-tip collapse="true" icon="false"}
+## 💡 Solution
+
+```{r ex6_solution, fig.width=10, fig.height=12}
+features_to_try <- c("cell_size", "bare_nuclei", "clump_thickness")
+
+plots <- lapply(features_to_try, function(f) {
+  
+  df_raw <- data.frame(
+    value = x[, f],
+    type  = "Original (X)"
+  )
+  df_std <- data.frame(
+    value = Z_real[, f],
+    type  = "Standardized (Z)"
+  )
+  
+  df_plot <- rbind(df_raw, df_std)
+  
+  mean_raw <- mean(df_raw$value)
+  mean_std <- mean(df_std$value)
+  
+  ggplot(df_plot, aes(x = value, fill = type)) +
+    geom_density(alpha = 0.5) +
+    facet_wrap(~type, scales = "free_x") +
+    geom_vline(
+      data = df_raw,
+      aes(xintercept = mean_raw),
+      color = "blue", linetype = "dashed"
+    ) +
+    geom_vline(
+      data = df_std,
+      aes(xintercept = mean_std),
+      color = "red", linetype = "dashed"
+    ) +
+    labs(
+      title = paste("Distribution of", f, "before and after standardization"),
+      x = "Value",
+      y = "Density"
+    ) +
+    theme_bw() +
+    theme(legend.position = "none")
+})
+
+# Display all plots in a grid
+patchwork::wrap_plots(plots, ncol = 1)
+```
+
+Looking at the shapes, we can note several important aspects:
+
+- **Uniformity of cell size**: shows mild bimodality. Standardization preserves this pattern, confirming that the structure is intrinsic to the data.
+- **Bare nuclei**: often strongly bimodal due to clear differences between benign and malignant samples. After standardization, the two modes remain just as separated, showing that Z‑scoring does not remove biological structure.
+- **Clump thickness**: typically broader and more diffuse. It remains “more uniform” (less clearly bimodal), illustrating that some features carry weaker class separation and therefore produce smoother, less distinctive distributions.
+
+Different features behave differently because they capture different biological phenomena. Each measurement has its own biological interpretation, and therefore its own characteristic distribution. Some features vary smoothly across patients, while others show abrupt jumps depending on tumour aggressiveness or cellular morphology. This explains why some distributions look clearly multimodal and others do not.
+
+Standardization does not change the shape of a distribution, because it is a linear transformation. The operation
+
+$$ z = \frac{x - \mu}{\sigma} $$
+
+shifts all values by the mean and rescales them by the standard deviation, but it does **not** alter skewness, multimodality, or discreteness.
+Z‑scoring does *not* make distributions Gaussian; it only centers and rescales. Any multimodality, skewness, or clustering reflects genuine biological heterogeneity and is preserved through standardization.
+:::
+
+
+## PCA
+
+```{r real_pca}
+pca_real <- stats::prcomp(x = Z_real, retx = TRUE, center = FALSE, scale. = FALSE)
+```
+
+### Proportion of Explained Variance
+
+```{r real_pca_scree, fig.width=7, fig.height=4}
+factoextra::fviz_eig(
+  X         = pca_real,
+  addlabels = TRUE,
+  ncp       = 9,
+  main      = "Scree Plot — Breast Cancer Data"
+) +
+  theme_bw()
+```
+
+The first two PCs explain a substantial fraction of the total variance — already a sign that the data contain strong structure.
+
+### Individual Plot (coloured by diagnosis)
+
+```{r real_pca_ind, fig.width=7, fig.height=5}
+factoextra::fviz_pca_ind(
+  X          = pca_real,
+  geom.ind   = "point",
+  col.ind    = y,
+  palette    = c("#00AFBB", "#FC4E07"),
+  addEllipses = TRUE,
+  ellipse.type = "convex",
+  legend.title = "Diagnosis",
+  title      = "PCA — Breast Cancer Data"
+) +
+  theme_bw()
+```
+
+```{r real_pca_ind_vals, echo=FALSE}
+# Variance explained by first two PCs, for use in text below
+var_pct_real <- round(
+  summary(pca_real)$importance["Proportion of Variance", 1:2] * 100, 1
+)
+
+# Compute direction-dependent values for inline use in the text below.
+load_pc1 <- pca_real$rotation[, "PC1"]
+load_pc2 <- pca_real$rotation[, "PC2"]
+
+# Which class clusters in the arrow direction on PC1?
+lvls <- levels(y)
+mean_pc1 <- tapply(pca_real$x[, "PC1"], y, mean)
+malignant_pc1_dir <- ifelse(mean_pc1['malignant'] > 0, "positive", "negative")
+benign_pc1_dir    <- ifelse(mean_pc1['benign'] > 0, "positive", "negative")
+class_in_arrow_dir <- ifelse(mean_pc1[lvls[2]] > mean_pc1[lvls[1]], lvls[2], lvls[1])
+```
+
+The two classes (benign / malignant) are **well separated along PC1**, which explains `r var_pct_real[1]`% of the total variance. The *benign* samples cluster towards `r benign_pc1_dir` PC1 values, while *malignant* samples occupy the `r malignant_pc1_dir` side. The substantial variance explained by PC1 alone, combined with this clear class separation, suggests that the cytological features contain strong and consistent discriminative information.
+
+### Biplot
+
+```{r real_pca_biplot, fig.width=8, fig.height=6}
+factoextra::fviz_pca_biplot(
+  X           = pca_real,
+  geom.ind    = "point",
+  col.ind     = y,
+  palette     = c("#00AFBB", "#FC4E07"),
+  addEllipses = TRUE,
+  ellipse.type = "convex",
+  legend.title = "Diagnosis",
+  title        = "Biplot — Breast Cancer Data",
+  repel        = TRUE
+) +
+  theme_bw()
+```
+
+```{r real_biplot_vals, echo=FALSE}
+# Compute direction-dependent values for inline use in the text below.
+# This chunk is hidden so the student sees clean prose, not computation.
+
+load_pc1 <- pca_real$rotation[, "PC1"]
+load_pc2 <- pca_real$rotation[, "PC2"]
+
+# Direction most arrows point on PC1 (sign of the mean loading)
+mean_load_pc1   <- mean(load_pc1)
+pc1_arrow_dir   <- ifelse(mean_load_pc1 > 0, "positive", "negative")
+pc1_arrow_dir_op <- ifelse(mean_load_pc1 > 0, "negative", "positive")
+
+# Which class clusters in the arrow direction on PC1?
+lvls <- levels(y)
+mean_pc1 <- tapply(pca_real$x[, "PC1"], y, mean)
+malignant_pc1_dir <- ifelse(mean_pc1[lvls[2]] > mean_pc1[lvls[1]], "positive", "negative")
+benign_pc1_dir    <- ifelse(mean_pc1[lvls[1]] > mean_pc1[lvls[2]], "positive", "negative")
+class_in_arrow_dir <- ifelse(malignant_pc1_dir == pc1_arrow_dir, 'malignant', 'benign')
+
+# Mitoses loadings on PC1 and PC2
+mit_pc1 <- round(load_pc1["mitoses"], 3)
+mit_pc2 <- round(load_pc2["mitoses"], 3)
+
+# Variable with the largest absolute loading on PC2 (excluding Mitoses)
+max_pc2_other_var <- names(sort(abs(load_pc2[names(load_pc2) != "mitoses"]),
+                                decreasing = TRUE))[1]
+max_pc2_other_val <- round(max(abs(load_pc2[names(load_pc2) != "mitoses"])), 2)
+```
+
+The biplot is particularly informative for the breast cancer dataset. Several observations stand out:
+
+- **Most arrows point in the same direction** (towards `r pc1_arrow_dir` PC1 values), indicating that the nine cytological features are **positively correlated** with each other: samples with high scores on one feature tend to score high on the others too. This makes biological sense — malignant tumours tend to show widespread cytological abnormalities across all assessed characteristics simultaneously.
+- **How to read the arrow direction**: a PC1 score is computed as a weighted sum of the original (standardised) feature values, where the weights are the loadings:  ${PC1}_i = {w}_1{z}_{i1} + {w}_2{z}_{i2} + ... + {w}_9{z}_{i9}$. Because most loadings ${w}_k$ are `r pc1_arrow_dir` (i.e. the arrows point `r pc1_arrow_dir`), a sample with **high** feature values — such as a malignant tumour scoring close to 10 on most cytological scales — will produce a **`r pc1_arrow_dir`** PC1 score. Conversely, a benign tumour with low feature values will produce a score closer to zero or on the `r benign_pc1_dir` side. The arrow direction therefore tells us *which end of PC1 corresponds to high feature values*, not which class has the higher score in an absolute sense.
+- **Arrow length on PC1**: *mitoses* has a notably smaller PC1 loading (`r mit_pc1`) compared to most other variables, suggesting it contributes less to the first principal component. However, looking also at PC2, *mitoses* actually has the **largest loading** on that axis (`r mit_pc2`), well above `r max_pc2_other_var` (`r max_pc2_other_val`). This means *mitoses* is not unimportant — it simply captures a **different dimension of variation**, one that is orthogonal to the main malignancy axis.
+- **Separation of classes**: malignant samples cluster towards **`r malignant_pc1_dir` PC1** — the direction in which most arrows point. Combining with the point above: these are the samples with the **highest cytological feature values**, confirming that pronounced cellular abnormality is the hallmark of the malignant class. PC1 can therefore be interpreted as a **malignancy axis** — it orders samples from cytologically normal (one end) to cytologically abnormal (the other end), regardless of which end carries a positive or negative sign.
+- **A note on sign**: the direction of the arrows (and of the class separation) could equally well be reversed — if the eigenvector signs were flipped, all arrows would point `r pc1_arrow_dir_op` and `r class_in_arrow_dir` samples would cluster on the `r pc1_arrow_dir_op` side. The geometry and the biology would be identical.
+
+## Classical MDS
+
+As with the synthetic data, we compute the pairwise Euclidean distance matrix on the standardized features and then apply `cmdscale()` to obtain a 2D embedding. Because we use Euclidean distances, the MDS result should be very similar to PCA — this will serve as a useful consistency check.
+
+```{r real_mds}
+D_real        <- stats::dist(x = Z_real, method = "euclidean")
+mds_real      <- stats::cmdscale(d = D_real, k = 2, eig = TRUE)
+mds_real_df   <- as.data.frame(mds_real$points)
+colnames(mds_real_df) <- c("Dim1", "Dim2")
+mds_real_df$Diagnosis <- y
+```
+
+```{r real_mds_plot, fig.width=7, fig.height=5}
+ggplot(mds_real_df, aes(x = Dim1, y = Dim2, colour = Diagnosis, shape = Diagnosis)) +
+  geom_point(size = 2, alpha = 0.7) +
+  scale_colour_manual(values = c("#00AFBB", "#FC4E07")) +
+  geom_vline(xintercept = 0, linetype = 2, color = "grey60") +
+  geom_hline(yintercept = 0, linetype = 2, color = "grey60") +
+  stat_ellipse(type = "norm") +
+  labs(title = "Classical MDS — Breast Cancer Data", x = "Component 1", y = "Component 2") +
+  theme_bw()
+```
+
+```{r real_mds_plot_vals, echo=FALSE}
+# Compute direction-dependent values for inline use in the text below.
+# This chunk is hidden so the student sees clean prose, not computation.
+
+mean_dim1 <- tapply(mds_real_df[, "Dim1"], mds_real_df[, "Diagnosis"], mean)
+malignant_mds_dim1_dir <- ifelse(mean_dim1['malignant'] > 0, "positive", "negative")
+benign_mds_dim1_dir    <- ifelse(mean_dim1['benign'] > 0, "positive", "negative")
+class_in_arrow_dir <- ifelse(mean_pc1[lvls[2]] > mean_pc1[lvls[1]], lvls[2], lvls[1])
+```
+
+The MDS plot closely mirrors the PCA individual plot: the two classes are well separated along the first component, with malignant samples on the `r malignant_mds_dim1_dir` side of the axis. The overlapping ellipses reflect the confidence regions estimated from the data, and the modest overlap along Component 2 confirms that most of the discriminative signal is contained in the first dimension.
+
+This consistency between PCA and MDS is expected: both methods recover the same underlying linear structure when Euclidean distances are used. The slight differences in scale and possible axis reflections are due to numerical differences in the eigendecomposition routines, not to any meaningful difference in the geometry.
+
+## t-SNE
+
+t-SNE is particularly well-suited for visualising the **local neighbourhood structure** of the data. We apply it here with a perplexity of 30, which is a reasonable default for this dataset size (683 observations).
+
+```{r real_tsne}
+set.seed(5381L)
+
+tsne_real <- Rtsne::Rtsne(
+  X            = Z_real,
+  dims         = 2,
+  perplexity   = 30,
+  max_iter     = 1000,
+  check_duplicates = FALSE,
+  verbose      = FALSE
+)
+
+tsne_real_df <- as.data.frame(tsne_real$Y)
+colnames(tsne_real_df) <- c("tSNE1", "tSNE2")
+tsne_real_df$Diagnosis <- y
+```
+
+```{r real_tsne_plot, fig.width=7, fig.height=5}
+ggplot(tsne_real_df, aes(x = tSNE1, y = tSNE2, colour = Diagnosis, shape = Diagnosis)) +
+  geom_point(size = 2, alpha = 0.7) +
+  scale_colour_manual(values = c("#00AFBB", "#FC4E07")) +
+  labs(title = "t-SNE — Breast Cancer Data", x = "t-SNE 1", y = "t-SNE 2") +
+  theme_bw()
+```
+
+```{r real_tsne_vals, echo=FALSE}
+# Compute which group shows more internal spread in the t-SNE embedding,
+# as a proxy for sub-cluster heterogeneity.
+tsne_spread <- tapply(
+  sqrt(tsne_real_df$tSNE1^2 + tsne_real_df$tSNE2^2),
+  y,
+  sd
+)
+more_spread_class <- names(which.max(tsne_spread))
+less_spread_class <- names(which.min(tsne_spread))
+```
+
+t-SNE confirms the structure already seen with PCA and MDS: the two classes form largely distinct groups with minimal overlap. Notably, the t-SNE plot also reveals some internal heterogeneity that was less apparent in the linear projections — the **`r more_spread_class`** group in particular appears more scattered and may contain sub-clusters, while the **`r less_spread_class`** group is relatively compact. These internal patterns could reflect biological variability within each class (e.g., different tumour grades or cytological subtypes), though interpreting them further would require additional clinical annotations.
+
+Keep in mind that the **absolute positions and inter-cluster distances in a t-SNE plot are not directly interpretable** — only the local neighbourhood structure is preserved.
+
+## UMAP
+
+UMAP provides an alternative non-linear embedding that tends to better preserve both local and global structure relative to t-SNE, while also being computationally faster on large datasets.
+
+```{r real_umap}
+set.seed(5381L)
+
+umap_real <- uwot::umap(
+  X            = Z_real,
+  n_components = 2,
+  n_neighbors  = 15,
+  min_dist     = 0.1
+)
+
+umap_real_df <- as.data.frame(umap_real)
+colnames(umap_real_df) <- c("UMAP1", "UMAP2")
+umap_real_df$Diagnosis <- y
+```
+
+```{r real_umap_plot, fig.width=7, fig.height=5}
+ggplot(umap_real_df, aes(x = UMAP1, y = UMAP2, colour = Diagnosis, shape = Diagnosis)) +
+  geom_point(size = 2, alpha = 0.7) +
+  scale_colour_manual(values = c("#00AFBB", "#FC4E07")) +
+  labs(title = "UMAP — Breast Cancer Data", x = "UMAP 1", y = "UMAP 2") +
+  theme_bw()
+```
+
+The UMAP embedding shows a clear separation between the benign and malignant classes, with the two groups forming compact, well-defined regions. Compared to t-SNE, the layout tends to be more stable across different runs and the **relative positions of the two groups carry more meaning** — a larger gap between clusters in UMAP is generally more reflective of true distance in the original feature space than in t-SNE.
+
+## Comparison of All Methods
+
+Finally, we bring all four methods together in a single panel to compare how each one represents the same data:
+
+```{r real_comparison, fig.width=12, fig.height=10}
+# Prepare a unified data frame for each method
+var_pct_real <- round(
+  summary(pca_real)$importance["Proportion of Variance", 1:2] * 100, 1
+)
+
+pca_df_real <- data.frame(
+  Dim1      = pca_real$x[, 1],
+  Dim2      = pca_real$x[, 2],
+  Diagnosis = y,
+  Method    = "PCA"
+)
+
+mds_df2 <- data.frame(
+  Dim1      = mds_real_df$Dim1,
+  Dim2      = mds_real_df$Dim2,
+  Diagnosis = y,
+  Method    = "Classical MDS"
+)
+
+tsne_df2 <- data.frame(
+  Dim1      = tsne_real_df$tSNE1,
+  Dim2      = tsne_real_df$tSNE2,
+  Diagnosis = y,
+  Method    = "t-SNE"
+)
+
+umap_df2 <- data.frame(
+  Dim1      = umap_real_df$UMAP1,
+  Dim2      = umap_real_df$UMAP2,
+  Diagnosis = y,
+  Method    = "UMAP"
+)
+
+all_methods <- rbind(pca_df2 <- pca_df_real, mds_df2, tsne_df2, umap_df2)
+all_methods$Method <- factor(all_methods$Method, levels = c("PCA", "Classical MDS", "t-SNE", "UMAP"))
+
+ggplot(all_methods, aes(x = Dim1, y = Dim2, colour = Diagnosis, shape = Diagnosis)) +
+  geom_point(size = 1.5, alpha = 0.7) +
+  scale_colour_manual(values = c("#00AFBB", "#FC4E07")) +
+  facet_wrap(~Method, scales = "free", ncol = 2) +
+  labs(
+    title = "Dimensionality Reduction Methods — Breast Cancer Data",
+    x     = "Dimension 1",
+    y     = "Dimension 2"
+  ) +
+  theme_bw() +
+  theme(strip.text = element_text(face = "bold"))
+```
+
+Comparing the four panels highlights both the shared signal and the methodological differences:
+
+- **PCA and MDS** (top row) produce near-identical layouts, as expected for Euclidean distances. Both are linear and interpretable: the horizontal axis directly reflects the linear combination of features that explains the most variance, which we have seen corresponds to an overall measure of cytological abnormality.
+- **t-SNE and UMAP** (bottom row) are non-linear and capture local structure that linear methods may miss. Both reveal a cleaner separation than PCA/MDS, with tighter clusters and less overlap between the classes. This suggests that the decision boundary between benign and malignant tumours is not purely linear in the original feature space.
+- Despite these differences, all four methods **agree on the fundamental result**: the two classes are separable, and the separation is predominantly captured in a single dominant dimension.
+
+::: {.callout-note}
+## Which method should I use?
+
+| Method | Type | Preserves | Use when |
+|--------|------|-----------|----------|
+| PCA | Linear | Global variance | First exploration; interpretable axes |
+| Classical MDS | Linear | Pairwise distances | Any distance metric; equivalent to PCA for Euclidean |
+| t-SNE | Non-linear | Local neighbourhoods | Visualising cluster structure |
+| UMAP | Non-linear | Local + global | Faster than t-SNE; better global layout |
+
+None of these methods is universally superior. In practice, it is common to apply **PCA first** (for efficiency and interpretability) and then **t-SNE or UMAP** on the top PCs to reveal local structure.
+:::
+
+::: {.callout-caution icon="false"}
+## ✏️ Exercise 7: t-SNE on PCA-reduced data
+
+A common pipeline is to first reduce dimensionality with PCA and then apply t-SNE on the top PCs (e.g., the first 5 or 7 PCs). This speeds up t-SNE and reduces noise.
+
+1. Extract the scores of the first 7 PCs from `pca_real`.
+2. Apply t-SNE to these 7 dimensions.
+3. Compare the result with the t-SNE applied directly to all 9 features.
+:::
+
+::: {.callout-tip collapse="true" icon="false"}
+## 💡 Solution
+
+```{r ex7_solution, fig.width=10, fig.height=4}
+# Step 1: Extract top 7 PCs
+top7_pcs <- pca_real$x[, 1:7]
+
+# Step 2: t-SNE on top 7 PCs
+set.seed(5381L)
+tsne_pca7 <- Rtsne::Rtsne(
+  X = top7_pcs, dims = 2, perplexity = 30,
+  max_iter = 1000, check_duplicates = FALSE, verbose = FALSE,
+  pca = FALSE  # PCA already done
+)
+
+df_tsne_pca7 <- data.frame(
+  tSNE1     = tsne_pca7$Y[, 1],
+  tSNE2     = tsne_pca7$Y[, 2],
+  Diagnosis = y
+)
+
+# Step 3: Comparison plot
+p_tsne_raw <- ggplot(tsne_real_df, aes(x = tSNE1, y = tSNE2,
+                                        colour = Diagnosis, shape = Diagnosis)) +
+  geom_point(size = 1.5, alpha = 0.7) +
+  scale_colour_manual(values = c("#00AFBB", "#FC4E07")) +
+  labs(title = "t-SNE on raw features (9D)", x = "t-SNE 1", y = "t-SNE 2") +
+  theme_bw()
+
+p_tsne_pca <- ggplot(df_tsne_pca7, aes(x = tSNE1, y = tSNE2,
+                                         colour = Diagnosis, shape = Diagnosis)) +
+  geom_point(size = 1.5, alpha = 0.7) +
+  scale_colour_manual(values = c("#00AFBB", "#FC4E07")) +
+  labs(title = "t-SNE on top 7 PCs", x = "t-SNE 1", y = "t-SNE 2") +
+  theme_bw()
+
+p_tsne_raw + p_tsne_pca
+```
+
+For this relatively small dataset (9 features), the difference is minor. On high-dimensional datasets (e.g., thousands of genes), the PCA pre-reduction step substantially speeds up t-SNE and often improves the quality of the embedding by removing noise dimensions.
+:::
+
+# Session Info
+
+```{r session_info}
+sessionInfo()
+```
