@@ -29,6 +29,13 @@ jobs:
             xml2
             ggplot2
             here
+            patchwork
+            factoextra
+            ComplexHeatmap
+            circlize
+            RColorBrewer
+            Rtsne
+            uwot
 
       - name: Set up Quarto
         uses: quarto-dev/quarto-actions/setup@v2
