@@ -1,0 +1,1448 @@
+---
+title: "Unsupervised Learning: Clustering"
+author: "Alessandro Barberis"
+date: last-modified
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-fold: false
+    highlight-style: github
+    theme: cosmo
+execute:
+  warning: false
+  message: false
+---
+
+# Objective
+
+In this tutorial, we will explore three **clustering** methods. Clustering is an unsupervised learning task: given a set of observations, we want to discover **natural groupings** without relying on prior knowledge of the group labels.
+
+We will cover three algorithms that differ substantially in their assumptions and computational properties:
+
+- **K-means** — partitions data into a fixed number $K$ of clusters by
+  minimising within-cluster variance (centroid-based, assumes spherical clusters).
+- **Hierarchical Clustering** — builds a tree of nested clusters (a
+  **dendrogram**) by successively merging groups based on pairwise distances;
+  does not require specifying $K$ in advance.
+- **DBSCAN** — identifies clusters as dense regions separated by sparse areas;
+  can find clusters of arbitrary shape and explicitly labels **noise** (outlier)
+  points.
+
+Throughout the tutorial we will use gene expression data from **The Cancer Genome Atlas Breast Cancer (TCGA BRCA)** cohort. This is a real, high-dimensional dataset where the ground-truth molecular subtypes (PAM50) are known, which allows us to both explore latent structure and evaluate how well each algorithm recovers biologically meaningful groupings.
+
+# Setup
+
+## Seed
+
+Before running the tutorial, we set a seed for the random number generator (RNG). Different R sessions produce different seeds by default (derived from the current time and process ID), leading to different results for any stochastic operation. By fixing a seed we ensure **reproducibility**.
+
+
+```{r setup_seed}
+set.seed(
+  seed        = 5381L,
+  kind        = "Mersenne-Twister",
+  normal.kind = "Inversion"
+)
+```
+
+# Libraries
+
+We will use the following R packages. Make sure they are installed before running the tutorial.
+
+```{r load_libraries}
+# File paths
+library(here)
+
+# Base statistics
+library(stats)
+
+# Visualisation
+library(ggplot2)
+library(patchwork)      # combine ggplots
+library(factoextra)     # clustering visualisation helpers
+library(ComplexHeatmap) # heatmaps
+library(circlize)       # colour scales for ComplexHeatmap
+library(RColorBrewer)   # colour palettes
+
+# Clustering algorithms
+library(dbscan)         # DBSCAN
+
+# Evaluation
+library(cluster)        # silhouette analysis
+library(mclust)         # Adjusted Rand Index
+```
+
+::: {.callout-tip}
+## Package installation
+
+If any package is missing, install it with:
+
+```r
+install.packages(c("here", "ggplot2", "patchwork", "factoextra",
+                   "dbscan", "cluster", "mclust", "circlize", "RColorBrewer"))
+
+if (!require("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+BiocManager::install("ComplexHeatmap")
+```
+:::
+
+# Data
+
+## TCGA BRCA Dataset
+
+We use gene expression data from the **Breast Invasive Carcinoma (BRCA)** project
+of [The Cancer Genome Atlas (TCGA)](https://www.cancer.gov/tcga). The data were
+downloaded with the `TCGAbiolinks` R package. Expression values are in
+**log₂(TPM + 1)** units, where TPM stands for Transcripts Per Million — a
+normalisation that accounts for differences in sequencing depth and gene length
+across samples.
+
+The dataset has been pre-processed: the 4,000 most variable genes (by standard
+deviation across samples) have been retained, and Ensembl gene IDs have been
+translated to HGNC gene symbols.
+
+```{r load_data}
+load(file = here::here("data", "tcga_brca_mini.rda"))
+```
+
+::: {.callout-note}
+## Sample alignment
+
+The rows of the expression matrix correspond to the rows of the metadata, in
+the same order. The row names of the expression matrix match the `patient_id`
+column of the metadata (short TCGA barcode, e.g. `TCGA-BH-A18H`). We verify
+this once upfront and rely on positional alignment throughout the tutorial.
+:::
+
+```{r check_alignment}
+stopifnot(all(rownames(tcga_brca_log2_tpm) == tcga_brca_sample_metadata$patient_id))
+cat("Alignment check passed.\n")
+```
+
+## Exploring the Data
+
+### Expression Matrix
+
+```{r data_dim}
+cat("Expression matrix — rows (samples):", nrow(tcga_brca_log2_tpm),
+    "| columns (genes):", ncol(tcga_brca_log2_tpm), "\n")
+cat("Value range:", round(range(tcga_brca_log2_tpm), 2), "\n")
+```
+
+```{r data_head}
+# Inspect the top-left corner of the matrix
+tcga_brca_log2_tpm[1:4, 1:5]
+```
+
+Each row is a patient sample and each column is a gene. Values are in
+log₂(TPM + 1): a value of 0 means the gene was not detected; larger values
+indicate higher expression. The log transformation compresses the dynamic range
+and makes the data more amenable to distance-based methods.
+
+### Clinical Metadata
+
+```{r metadata_head}
+head(tcga_brca_sample_metadata[, c("patient_id", "subtype",
+                                    "ER_status", "PR_status",
+                                    "stage", "age_years")])
+```
+
+The key variables we will use in this tutorial are:
+
+| Column | Description |
+|--------|-------------|
+| `patient_id` | Short TCGA patient barcode |
+| `subtype` | PAM50 molecular subtype (ground truth) |
+| `ER_status` | Oestrogen receptor status (`ER+` / `ER-`) |
+| `PR_status` | Progesterone receptor status (`PR+` / `PR-`) |
+| `stage` | Tumour stage at diagnosis |
+| `age_years` | Age at diagnosis |
+
+### PAM50 Subtypes
+
+The PAM50 classifier assigns each breast tumour to one of five molecular subtypes based on the expression of a 50-gene panel. Each subtype has a distinct biological profile and clinical prognosis:
+
+- **Luminal A** — ER-positive, typically PR-positive and HER2-negative, with low proliferation activity (e.g., low MKI67). This subtype is associated with the most favourable prognosis and represents approximately 50–60% of breast cancers.
+- **Luminal B** — Generally ER-positive but characterised by higher proliferation and worse prognosis than Luminal A. These tumours may have low or absent PR expression, and some show HER2 overexpression or amplification. Importantly, the PAM50 classification is based on gene expression patterns rather than receptor status alone. Luminal B tumours account for roughly 15–20% of cases.
+- **HER2-enriched** — Defined by high expression of HER2-related and proliferation-associated genes. While often associated with HER2 amplification, this subtype is not equivalent to clinically HER2-positive disease: some HER2-enriched tumours are HER2-negative by immunohistochemistry. These tumours are frequently ER/PR low or negative and represent approximately 10–15% of cases.
+- **Basal-like** — Characterised by high proliferation and expression of basal cytokeratins. The term “basal-like” comes from the fact that these tumors have gene expression patterns that resemble those exhibited by basal cells. These tumours are predominantly (but not exclusively) triple-negative (ER−, PR−, HER2−) and are associated with poorer clinical outcomes. Around 70–80% of Basal-like tumours are triple-negative, but the two categories are not synonymous: some Basal-like tumours express ER or HER2, and not all triple-negative tumours have a Basal-like gene expression profile.
+- **Normal-like** — Displays gene expression patterns resembling normal breast tissue. This subtype is less consistently observed and is often thought to reflect a high proportion of normal or stromal cells within the sample rather than a distinct tumour-intrinsic subtype, although this remains an area of discussion.
+
+We can investigate the number of samples per subtype using the `table()` function.
+
+```{r subtype_table}
+subtype_counts <- table(tcga_brca_sample_metadata$subtype)
+print(subtype_counts)
+```
+
+To facilitate comparison across subtypes, we can convert these counts into proportions.
+
+```{r subtype_prop}
+round(subtype_counts / sum (subtype_counts), 2)
+```
+
+Now we can visualise the subtype distribution.
+
+```{r subtype_barplot, fig.width=6, fig.height=4}
+# Colour palette used consistently throughout this tutorial
+pal_subtype <- c(
+  "Basal"  = "#E41A1C",
+  "Her2"   = "#FF7F00",
+  "LumA"   = "#4DAF4A",
+  "LumB"   = "#377EB8",
+  "Normal" = "#984EA3"
+)
+
+df_sub <- as.data.frame(subtype_counts)
+colnames(df_sub) <- c("Subtype", "Count")
+
+ggplot(df_sub, aes(x = Subtype, y = Count, fill = Subtype)) +
+  geom_col(width = 0.6) +
+  scale_fill_manual(values = pal_subtype, guide = "none") +
+  geom_text(aes(label = Count), vjust = -0.4, size = 3.5) +
+  labs(title = "PAM50 Subtype Distribution — TCGA BRCA",
+       x = "PAM50 Subtype", y = "Number of Samples") +
+  theme_bw()
+```
+
+The dataset is dominated by **Luminal A** (`r subtype_counts["LumA"]` samples),followed by Luminal B, Basal, HER2-enriched, and Normal-like. This class imbalance reflects the real-world prevalence of breast cancer subtypes and has practical consequences: an unsupervised algorithm that recovers the class boundaries will produce clusters of very different sizes, and the larger classes will exert more influence on the centroid positions.
+
+We can also examine how hormone receptor status (ER and PR) are distributed across PAM50 subtypes.
+
+```{r er_pr_table}
+# Subset table
+clin_df <- tcga_brca_sample_metadata[,c("subtype", "ER_status","PR_status")]
+# Create combined ER/PR variable
+clin_df$ER_PR <- paste(clin_df$ER_status, clin_df$PR_status, sep = "_")
+
+# ER vs subtype
+# table_ER <- table(clin_df$subtype, clin_df$ER_status)
+
+# PR vs subtype
+# table_PR <- table(clin_df$subtype, clin_df$PR_status)
+
+# ER/PR vs subtype
+table_ER_PR <- table(clin_df$subtype, clin_df$ER_PR)
+
+# table_ER
+# table_PR
+
+table_ER_PR
+```
+
+For better comparison, we can compute proportions instead of raw counts.
+
+```{r er_pr_prop_table}
+round(prop.table(table_ER_PR, margin = 1), 2)
+```
+
+The distribution of ER and PR status across PAM50 subtypes shows strong concordance with their underlying biology. Basal-like tumours are predominantly ER−/PR−, consistent with the triple-negative phenotype, while Luminal A tumours are overwhelmingly ER+/PR+, reflecting their hormone dependence. Luminal B tumours remain largely ER-positive but show increased PR loss, highlighting their higher proliferative activity and more aggressive behaviour. In contrast, the HER2-enriched subtype displays a mixed ER/PR profile, with a majority of ER−/PR− tumours alongside a substantial fraction of ER-positive cases. Finally, the Normal-like group does not display a clear receptor pattern, supporting the interpretation that it may reflect normal tissue admixture rather than a distinct tumour subtype.
+
+
+
+## Pre-processing
+
+### Standardization
+
+Before clustering, we standardize each gene (column) to have zero mean and unit standard deviation. This prevents genes with intrinsically high expression levels from dominating the distance calculations simply because of their numerical scale.
+
+```{r normalize}
+Z <- scale(x = tcga_brca_log2_tpm, center = TRUE, scale = TRUE)
+
+cat("Column means (should be ≈ 0):",
+    round(mean(colMeans(Z)), 6), "\n")
+cat("Column SDs   (should be ≈ 1):",
+    round(mean(apply(Z, 2, sd)), 6), "\n")
+```
+
+### Dimensionality Reduction Before Clustering
+
+With 4,000 features, computing all pairwise distances is both computationally expensive and statistically problematic. In high-dimensional spaces, all pairwise distances tend to become increasingly similar — a phenomenon known as the **curse of dimensionality** — making it harder for distance-based algorithms to distinguish between dense and sparse regions.
+
+A standard solution in genomics is to first apply **PCA** and then cluster on the top principal components. This:
+
+- retains the dominant sources of biological variation,
+- removes noise captured in low-variance PCs,
+- makes distance calculations fast and numerically stable.
+
+```{r pca_reduction}
+pca_res <- stats::prcomp(x = Z, center = FALSE, scale. = FALSE)
+
+# Proportion of variance explained by each PC
+var_explained <- summary(pca_res)$importance["Proportion of Variance", ]
+cumvar        <- cumsum(var_explained)
+
+# How many PCs to explain 80% and 90% of variance?
+n_pcs_80 <- which(cumvar >= 0.80)[1]
+n_pcs_90 <- which(cumvar >= 0.90)[1]
+cat("PCs needed to explain 80% of variance:", n_pcs_80, "\n")
+cat("PCs needed to explain 90% of variance:", n_pcs_90, "\n")
+```
+
+```{r pca_scree, fig.width=7, fig.height=4}
+factoextra::fviz_eig(
+  X         = pca_res,
+  addlabels = TRUE,
+  ncp       = 20,
+  main      = "Scree Plot — TCGA BRCA (top 20 PCs)"
+) +
+  theme_bw()
+```
+
+```{r pca_scree_vals, echo=FALSE}
+pc1_pct  <- round(var_explained["PC1"] * 100, 1)
+pc2_pct  <- round(var_explained["PC2"] * 100, 1)
+pc12_pct <- round((var_explained["PC1"] + var_explained["PC2"]) * 100, 1)
+```
+
+There are a few important things to notice about this scree plot:
+
+- **No sharp elbow.** Unlike the synthetic data in the dimensionality reduction tutorial, the variance curve here declines gradually. This is normal for bulk RNA-seq data: with 4,000 variable genes, each gene contributes a small, partially distinct biological signal, so the variance is spread across many components rather than concentrated in a few.
+
+- **PC1 and PC2 explain `r pc1_pct`% and `r pc2_pct`% of variance respectively (`r pc12_pct`% combined).** These numbers may look modest in absolute terms, but they are actually high for this type of data. Capturing ~25% of total variance in just two dimensions out of 4,000 genes reflects a strong, coherent biological signal. Biologically, these components are often interpreted as capturing major axes of variation in breast cancer transcriptomes:
+  - **PC1** — the ER+/ER− axis: the contrast between Luminal (ER-positive) and Basal-like (ER-negative) tumours, the dominant transcriptional axis in breast cancer.
+  - **PC2** — the proliferation axis: the contrast between high-proliferating (Luminal B, Basal-like) and low-proliferating (Luminal A, Normal-like) tumours.
+
+- **`r n_pcs_80` PCs are needed to explain 80% of variance** (and `r n_pcs_90` for 90%). For clustering, however, we do not need to explain a fixed percentage of variance — we need to retain the dimensions that carry *biologically relevant* variation. The top PCs are precisely those dimensions.
+
+We retain the top **50 PCs** as input for all clustering analyses. This is a common pragmatic choice in genomics: it captures the dominant biology, reduces 4,000 features to 50, and makes all subsequent distance calculations fast and numerically stable:
+
+```{r pca_scores}
+PC <- pca_res$x[, 1:50]
+cat("Reduced matrix — rows:", nrow(PC), "| columns:", ncol(PC), "\n")
+```
+
+We also keep the first two PCs for 2D visualisation throughout the tutorial:
+
+```{r pca_2d}
+pca_2d  <- as.data.frame(pca_res$x[, 1:2])
+var_pct <- round(var_explained[1:2] * 100, 1)
+pca_2d$Subtype <- tcga_brca_sample_metadata$subtype
+```
+
+Let us first look at the PCA 2D projection coloured by the known PAM50 subtypes.
+This will be our reference throughout the tutorial:
+
+```{r pca_plot_subtypes, fig.width=7, fig.height=5}
+ggplot(pca_2d, aes(x = PC1, y = PC2, colour = Subtype)) +
+  geom_point(size = 1.2, alpha = 0.6) +
+  scale_colour_manual(values = pal_subtype) +
+  stat_ellipse(type = "norm", linetype = 2) +
+  labs(
+    title = "PCA — TCGA BRCA (coloured by PAM50 subtype)",
+    x     = paste0("PC1 (", var_pct[1], "%)"),
+    y     = paste0("PC2 (", var_pct[2], "%)")
+  ) +
+  theme_bw()
+```
+
+Even in just two dimensions, the five subtypes show meaningful separation. 
+
+- **Basal-like** tumours (red) occupy a clearly distinct region, primarily separated along PC1. This is consistent with the strong transcriptional contrast between ER-negative Basal-like tumours and ER-positive Luminal tumours, suggesting that PC1 captures a major axis of hormone receptor–related variation.
+
+- In contrast, **Luminal A** (green) and **Luminal B** (blue) overlap considerably in this 2D projection. Both subtypes are ER/PR-positive, and their primary differences are driven by proliferation and cell cycle activity. While PC2 is often associated with proliferation, in this dataset it does not fully separate these groups, suggesting that proliferation-related variation is likely distributed across higher-order principal components, leading to incomplete separation in this low-dimensional space.
+
+- The **HER2-enriched** subtype (orange) occupies an intermediate and more diffuse region between Luminal and Basal-like tumours, reflecting its heterogeneous molecular profile and partial overlap with both groups.
+
+- Finally, the **Normal-like** subtype (purple) appears more dispersed and does not form a well-defined cluster, consistent with the idea that it may reflect varying degrees of normal tissue admixture rather than a distinct tumour-intrinsic expression programme.
+
+Overall, this plot highlights an important point: the directions of maximum variance captured by PCA do not necessarily align perfectly with the boundaries between biologically defined subtypes. As a result, we should expect only partial recovery of these subtypes in downstream unsupervised clustering analyses.
+
+::: {.callout-caution icon="false"}
+## ✏️ Exercise 1: Variance explained
+
+The code above computes `n_pcs_80` and `n_pcs_90`. Produce a cumulative variance plot (showing enough PCs to reach both thresholds) with horizontal reference lines at 80% and 90% and vertical dashed lines at `n_pcs_80` and `n_pcs_90`. Comment on why so many components are needed compared to a small clinical dataset.
+
+*Hint*: make sure the x-axis extends at least to `n_pcs_90`.
+:::
+
+::: {.callout-tip collapse="true" icon="false"}
+## 💡 Solution
+
+```{r ex1_solution, fig.width=7, fig.height=4}
+# Show enough PCs to comfortably include both thresholds
+n_show    <- min(n_pcs_90 + 30, length(cumvar))
+df_cumvar <- data.frame(
+  PC     = seq_len(n_show),
+  CumVar = cumvar[seq_len(n_show)] * 100
+)
+
+ggplot(df_cumvar, aes(x = PC, y = CumVar)) +
+  geom_line(colour = "steelblue") +
+  geom_hline(yintercept = 80, linetype = 2, colour = "orange",  linewidth = 0.8) +
+  geom_hline(yintercept = 90, linetype = 2, colour = "tomato",  linewidth = 0.8) +
+  geom_vline(xintercept = n_pcs_80, linetype = 3, colour = "orange") +
+  geom_vline(xintercept = n_pcs_90, linetype = 3, colour = "tomato") +
+  annotate("text", x = n_show * 0.85, y = 81.5, label = "80%", colour = "orange") +
+  annotate("text", x = n_show * 0.85, y = 91.5, label = "90%", colour = "tomato") +
+  labs(
+    title = "Cumulative Variance Explained — TCGA BRCA",
+    x     = "Number of PCs", y = "Cumulative Variance (%)"
+  ) +
+  theme_bw()
+```
+
+With `r n_pcs_80` PCs for 80% and `r n_pcs_90` for 90%, this dataset requires far more components than a small clinical dataset with a handful of features. This reflects the genuine complexity of the transcriptome: 4,000 variable genes each carry partially independent biological information. For clustering, however, the goal is not to explain a fixed percentage of variance — 50 PCs capturing the dominant biology is sufficient.
+:::
+
+# K-means Clustering
+
+**K-means** partitions $n$ observations into $K$ clusters by alternating between two steps:
+
+1. **Assignment**: assign each observation to the nearest centroid (by Euclidean distance).
+2. **Update**: recompute each centroid as the mean of its assigned observations.
+
+This continues until assignments no longer change. The objective minimised is the **total within-cluster sum of squares** (WCSS):
+
+$$\text{WCSS} = \sum_{k=1}^{K} \sum_{i \in C_k} \lVert x_i - \mu_k \rVert^2$$
+
+::: {.callout-warning}
+## K-means limitations
+
+- Requires specifying $K$ **in advance**.
+- Sensitive to the **initial placement** of centroids — use `nstart > 1`.
+- Assumes **spherical, equally-sized** clusters.
+- Sensitive to **outliers** because centroids are means.
+:::
+
+## Choosing K
+
+We use two complementary heuristics to guide the choice of $K$:
+
+- **Elbow method**: plot WCSS vs. $K$ and look for the point where the rate of decrease slows sharply. With high-dimensional RNA-seq data the curve is often gradual rather than sharply elbowed, making this criterion ambiguous.
+- **Average silhouette width**: the silhouette of each point measures how similar it is to its own cluster vs. its nearest other cluster (range −1 to +1; higher is better). The $K$ that maximises the average silhouette is preferred.
+
+```{r kmeans_choose_k, fig.width=11, fig.height=4}
+set.seed(5381L)
+
+p_elbow <- factoextra::fviz_nbclust(
+  x = PC, FUNcluster = kmeans,
+  method = "wss", k.max = 8, nstart = 25
+) + labs(title = "Elbow Method") + theme_bw()
+
+p_silh <- factoextra::fviz_nbclust(
+  x = PC, FUNcluster = kmeans,
+  method = "silhouette", k.max = 8, nstart = 25
+) + labs(title = "Average Silhouette Width") + theme_bw()
+
+p_elbow + p_silh
+```
+
+```{r kmeans_best_k, echo=FALSE}
+sil_vals <- sapply(2:8, function(k) {
+  set.seed(5381L)
+  km  <- kmeans(PC, centers = k, nstart = 25, iter.max = 100)
+  sil <- cluster::silhouette(km$cluster, dist(PC))
+  mean(sil[, "sil_width"])
+})
+best_k_sil <- which.max(sil_vals) + 1
+```
+
+::: {.callout-note}
+A brief note on interpreting the silhouette plot before reading the results: a **higher average silhouette width is better** because it means that, on average, each point is more similar to the members of its own cluster than to the members of the nearest other cluster. When the average silhouette is high (close to 1), the clusters are compact (points within a cluster are close to each other) and well-separated (clusters are far from each other). When it is low or negative, either the clusters overlap substantially or some points have been placed in the wrong cluster. Maximising this quantity across values of $K$ therefore identifies the partition that produces the most internally cohesive and externally distinct groups — without using any label information.
+:::
+
+As expected with RNA-seq data, the **elbow plot** does not show a sharp inflection — the WCSS decreases gradually and no single value of $K$ stands out clearly. The **silhouette plot** provides a cleaner signal: it peaks at **K = `r best_k_sil`**, suggesting that from a purely geometric standpoint the data are best described by two compact, well-separated groups.
+
+This result is informative rather than disappointing. K = `r best_k_sil` almost certainly corresponds to the major division between **ER-positive** (Luminal A + Luminal B + some HER2) and **ER-negative** (Basal-like + some HER2) tumours — the strongest transcriptional axis in breast cancer. The five PAM50 subtypes represent a finer subdivision within this major split, and some of them (Luminal A vs. Luminal B) are sufficiently similar that the silhouette metric does not reward separating them further.
+
+We will run K-means with both **K = `r best_k_sil`** (data-driven optimum) and **K = 5** (matching the number of PAM50 subtypes) and compare the two.
+
+## Running K-means
+
+We run K-means using the `kmeans()` function from the `stats` package.
+
+```{r kmeans_run}
+set.seed(5381L)
+
+res_km_opt <- stats::kmeans(PC, centers = best_k_sil,
+                             iter.max = 100, nstart = 25)
+res_km5    <- stats::kmeans(PC, centers = 5,
+                             iter.max = 100, nstart = 25)
+
+cat("K =", best_k_sil, "— cluster sizes:", res_km_opt$size, "\n")
+cat("K = 5 — cluster sizes:", res_km5$size, "\n")
+```
+
+::: {.callout-note}
+## `nstart` and reproducibility
+
+K-means is sensitive to the random initialisation of centroids. Setting `nstart = 25` runs the algorithm 25 times with different random starting configurations and returns the solution with the lowest WCSS, substantially reducing the risk of converging to a suboptimal local minimum. Combined with `set.seed()`, this ensures both solution quality and reproducibility.
+:::
+
+## Visualisation
+
+We project the cluster assignments onto the PCA 2D plane and use point shapes to encode the PAM50 subtypes. This allows a direct visual comparison between the unsupervised cluster boundaries and the supervised biological labels:
+
+```{r kmeans_plot, fig.width=13, fig.height=5}
+df_km <- data.frame(
+  PC1     = pca_2d$PC1, PC2 = pca_2d$PC2,
+  Subtype = tcga_brca_sample_metadata$subtype,
+  KM_opt  = factor(res_km_opt$cluster),
+  KM5     = factor(res_km5$cluster)
+)
+
+p_km_opt <- ggplot(df_km, aes(x = PC1, y = PC2,
+                               colour = KM_opt, shape = Subtype)) +
+  geom_point(size = 1.2, alpha = 0.7) +
+  scale_shape_manual(values = c(16, 17, 15, 3, 7)) +
+  labs(title = paste0("K-means (K = ", best_k_sil, ", data-driven)"),
+       x = paste0("PC1 (", var_pct[1], "%)"),
+       y = paste0("PC2 (", var_pct[2], "%)"),
+       colour = "Cluster", shape = "PAM50") +
+  theme_bw()
+
+p_km5 <- ggplot(df_km, aes(x = PC1, y = PC2,
+                             colour = KM5, shape = Subtype)) +
+  geom_point(size = 1.2, alpha = 0.7) +
+  scale_shape_manual(values = c(16, 17, 15, 3, 7)) +
+  labs(title = "K-means (K = 5, biology-driven)",
+       x = paste0("PC1 (", var_pct[1], "%)"),
+       y = paste0("PC2 (", var_pct[2], "%)"),
+       colour = "Cluster", shape = "PAM50") +
+  theme_bw()
+
+p_km_opt + p_km5
+```
+
+In the **K = `r best_k_sil`** plot, the two clusters correspond closely to the ER+ / ER− split visible in the PCA baseline: one cluster captures the Luminal subtypes (triangles and squares predominantly), and the other captures the Basal-like tumours (circles predominantly). Note that even K = `r best_k_sil` does not produce a perfectly clean partition — the intermediate region contains HER2-enriched and transitional samples that fall between the two groups.
+
+In the **K = 5** plot, the algorithm attempts to subdivide the data into five regions. Some of these regions align well with PAM50 subtypes (Basal-like is typically recovered as a clean cluster), while others mix multiple subtypes — particularly in the Luminal region where Luminal A and Luminal B overlap.
+
+## Evaluation
+
+### Contingency Table
+
+A contingency table cross-tabulates cluster assignments against known PAM50 subtypes. Because cluster labels are arbitrary (cluster 1 does not necessarily correspond to Luminal A), we assess the result by checking whether each cluster (row) is dominated by a single subtype (column). A cluster that contains a mixture of subtypes in roughly equal proportions indicates that the algorithm does not cleanly recover that boundary.
+
+```{r kmeans_confusion}
+cat("=== K =", best_k_sil, "(data-driven) ===\n")
+print(table(Cluster = res_km_opt$cluster,
+            Subtype = tcga_brca_sample_metadata$subtype))
+
+cat("\n=== K = 5 (biology-driven) ===\n")
+print(table(Cluster = res_km5$cluster,
+            Subtype = tcga_brca_sample_metadata$subtype))
+```
+
+**K = `r best_k_sil` (data-driven).** The two clusters correspond closely to the major transcriptional axis of ER signalling (ER-positive vs ER-negative biology). Cluster 1 captures almost all Basal-like tumours (176 out of 177) and nearly half of the HER2-enriched samples (32/69), with very few Luminal samples — this cluster is strongly enriched for ER-negative tumours, dominated by Basal-like cases, which are largely (but not exclusively) triple-negative.
+Cluster 2 captures the vast majority of Luminal A (519/522), Luminal B (185/192), and Normal-like (24/36) samples, together with the remaining HER2-enriched cases — this is the ER-positive / hormone-receptor-positive group.
+The two clusters are therefore largely "pure" with respect to the ER axis, even though they were derived without any label information.
+
+**K = 5 (biology-driven).** With five clusters, the algorithm attempts a finer subdivision. Cluster 5 is highly pure for Basal-like (152/177), closely matching what we saw as Cluster 1 in the K=2 solution. However, the remaining four clusters do not map cleanly to individual PAM50 subtypes: Cluster 3 mixes HER2-enriched (55), Luminal A (55), and Luminal B (96) — three subtypes that partially overlap in gene expression space, with HER2-enriched tumours showing intermediate profiles and Luminal A/B differing mainly along proliferation-related gradients. Cluster 2 is almost entirely Luminal A (275/307), while Cluster 4 captures a mixture of Luminal A and Luminal B, showing that unsupervised clustering recovers the dominant biological signal in the data, even without supervision.
+
+One additional observation worth noting: the majority of **Normal-like** samples (24 out of 36) end up in Cluster 2, which is otherwise dominated by Luminal A.
+This is biologically plausible, but should be interpreted carefully. The Normal-like subtype is thought to reflect samples with a higher proportion of normal tissue rather than a distinct tumour-intrinsic programme. As a result, their expression profiles are characterised by lower proliferation and the absence of strong Basal or HER2 signals, which places them closer in expression space to Luminal A tumours.From an unsupervised perspective, the gene expression distance between Normal-like and Luminal A tumours is smaller than between Normal-like and any other subtype, which is why K-means places them in the same cluster.
+
+### Silhouette Analysis
+
+The **silhouette score** of observation $i$ quantifies how well it fits in its assigned cluster relative to neighbouring clusters:
+
+$$s(i) = \frac{b(i) - a(i)}{\max(a(i),\, b(i))}$$
+
+where $a(i)$ is the mean distance from $i$ to all other points in its own cluster (**intra-cluster cohesion**), and $b(i)$ is the mean distance from $i$ to all points in the nearest other cluster (**inter-cluster separation**).
+
+- To understand why scores near +1 indicate well-clustered points, consider the formula: $s(i)$ is positive when $b(i) > a(i)$, i.e. when $i$ is on average closer to members of its own cluster than to members of any other cluster. The closer $s(i)$ is to 1, the stronger this separation: $i$ is tightly embedded inside a compact cluster that is far from its neighbours.
+
+- When $s(i) \approx 0$, $a(i) \approx b(i)$: $i$ is equally close to its own  cluster and to the nearest other cluster, placing it on the boundary between two groups. 
+
+- When $s(i) < 0$, $a(i) > b(i)$: $i$ is on average *closer* to a neighbouring cluster than to its assigned one, suggesting it may have been placed in the wrong cluster (or that the cluster structure in that region is genuinely ambiguous).
+
+
+```{r kmeans_silhouette, fig.width=11, fig.height=5}
+dist_pc <- dist(PC)
+
+sil_km_opt <- cluster::silhouette(res_km_opt$cluster, dist_pc)
+sil_km5    <- cluster::silhouette(res_km5$cluster,    dist_pc)
+
+p_sil_opt <- factoextra::fviz_silhouette(sil_km_opt, ggtheme = theme_bw(),
+               print.summary = FALSE) +
+  labs(title = paste0("Silhouette — K = ", best_k_sil)) +
+  theme(legend.position = "none")
+
+p_sil_5 <- factoextra::fviz_silhouette(sil_km5, ggtheme = theme_bw(),
+               print.summary = FALSE) +
+  labs(title = "Silhouette — K = 5") +
+  theme(legend.position = "none")
+
+p_sil_opt + p_sil_5
+```
+
+```{r kmeans_sil_vals, echo=FALSE}
+avg_sil_opt <- round(mean(sil_km_opt[, "sil_width"]), 4)
+avg_sil_5   <- round(mean(sil_km5[,    "sil_width"]), 4)
+```
+
+The average silhouette width is **`r avg_sil_opt`** for K = `r best_k_sil` and **`r avg_sil_5`** for K = 5. These numbers deserve a careful reading in context.
+For K = `r best_k_sil`, individual silhouette scores range from approximately −0.04 to +0.35: the bulk of samples are reasonably well-assigned (positive scores), but a meaningful fraction sit close to zero or slightly below, indicating that they lie near the boundary between the two clusters. For K = 5, the range broadens to roughly −0.10 to +0.33, and the average drops further — many points across all five clusters have scores close to zero, meaning they are almost equidistant from their own cluster and the nearest other.
+
+This is not a failure of the algorithm — it is an accurate reflection of the structure of the data. Breast cancer molecular subtypes are not perfectly discrete categories with sharp boundaries; they exist on a continuum of gene expression profiles, with gradual transitions between adjacent subtypes (especially Luminal A ↔ Luminal B and Luminal ↔ HER2). Points with near-zero or negative silhouette scores are biologically ambiguous samples whose transcriptional profiles genuinely lie between subtypes, and forcing them into one cluster or another is inherently uncertain.
+
+::: {.callout-note}
+Samples with silhouette values close to zero lie near cluster boundaries in expression space, meaning that their assignment is uncertain under the chosen clustering model. In many cases, these correspond to biologically intermediate or heterogeneous tumours, although low silhouette scores can also arise from noise or from the limitations of K-means in capturing non-spherical cluster structure.
+:::
+
+### Adjusted Rand Index (ARI)
+
+The **Adjusted Rand Index** measures the agreement between two partitions —
+here, the K-means cluster assignments and the PAM50 subtypes — corrected for
+the agreement expected by chance alone:
+
+$$\text{ARI} = \frac{\text{RI} - \mathbb{E}[\text{RI}]}{\max(\text{RI}) - \mathbb{E}[\text{RI}]}$$
+
+It ranges from −1 (systematic disagreement) to +1 (perfect agreement), with 0
+indicating random assignment.
+
+```{r kmeans_ari}
+ari_km_opt <- mclust::adjustedRandIndex(res_km_opt$cluster,
+                                         tcga_brca_sample_metadata$subtype)
+ari_km5    <- mclust::adjustedRandIndex(res_km5$cluster,
+                                         tcga_brca_sample_metadata$subtype)
+
+cat("ARI — K =", best_k_sil, ":", round(ari_km_opt, 4), "\n")
+cat("ARI — K = 5 :", round(ari_km5, 4), "\n")
+```
+
+::: {.callout-note}
+## Interpreting ARI on this dataset
+
+A moderate ARI (e.g. 0.2–0.5) is not a sign of failure. The PAM50 subtypes were defined using a curated 50-gene **supervised** classifier — recovering them with an **unsupervised** algorithm using 4,000 genes and no labels is a harder problem. An ARI > 0 means the clustering captures real biological structure beyond chance. A perfect ARI of 1.0 would require that all five subtypes are perfectly separated in the chosen feature space, which is not the case given the substantial transcriptional overlap between subtypes such as Luminal A and Luminal B.
+:::
+
+::: {.callout-caution icon="false"}
+## ✏️ Exercise 2: Hormone receptor status
+
+ER (oestrogen receptor) and PR (progesterone receptor) status are key clinical variables in breast cancer. Luminal subtypes are typically ER/PR positive, while Basal-like tumours are ER/PR negative.
+
+1. Produce a PCA 2D scatter plot coloured by **ER status**
+   (`tcga_brca_sample_metadata$ER_status`).
+2. Show the K-means (K = 5) cluster plot alongside it.
+3. Does the ER+ / ER− boundary align with any of the K-means cluster
+   boundaries? What does this suggest about what PC1 is capturing?
+:::
+
+::: {.callout-tip collapse="true" icon="false"}
+## 💡 Solution
+
+```{r ex2_solution, fig.width=13, fig.height=5}
+df_er <- data.frame(
+  PC1       = pca_2d$PC1, PC2 = pca_2d$PC2,
+  ER_status = tcga_brca_sample_metadata$ER_status,
+  KM5       = factor(res_km5$cluster)
+)
+
+p_er <- ggplot(df_er, aes(x = PC1, y = PC2, colour = ER_status)) +
+  geom_point(size = 1.2, alpha = 0.7) +
+  scale_colour_manual(values = c("ER+" = "#377EB8", "ER-" = "#E41A1C")) +
+  stat_ellipse(type = "norm", linetype = 2) +
+  labs(title = "PCA coloured by ER status",
+       x = paste0("PC1 (", var_pct[1], "%)"),
+       y = paste0("PC2 (", var_pct[2], "%)")) +
+  theme_bw()
+
+p_km5_er <- ggplot(df_er, aes(x = PC1, y = PC2, colour = KM5)) +
+  geom_point(size = 1.2, alpha = 0.7) +
+  labs(title = "K-means (K = 5)",
+       x = paste0("PC1 (", var_pct[1], "%)"),
+       y = paste0("PC2 (", var_pct[2], "%)"),
+       colour = "Cluster") +
+  theme_bw()
+
+p_er + p_km5_er
+```
+
+The ER+ / ER− separation aligns closely with the PC1 axis and with the K-means cluster boundaries. This confirms that **PC1 is primarily capturing ER signalling** — the dominant axis of transcriptional variation in breast cancer.
+The unsupervised clustering recovers this axis without any knowledge of hormone receptor status: meaningful biology emerges from the gene expression structure alone.
+:::
+
+# Hierarchical Clustering
+
+**Hierarchical clustering** builds a **dendrogram** — a tree-based representation that records the sequences of merges or splits used to create the hierarchy of nested clusters.
+
+In this tutorial, we use the agglomerative approach where each observation starts in its own cluster, and at each step the two closest clusters are merged. The height at which two clusters merge in the dendrogram reflects their dissimilarity: clusters that merge at a low height are similar; clusters that only merge near the root of the tree are dissimilar.
+Cutting the dendrogram at a given height produces a flat partition into $K$ clusters, where $K$ depends on the cut height.
+
+The key design choice is the **linkage criterion**, which defines how the distance between two clusters $A$ and $B$ is computed from pairwise point distances:
+
+| Linkage | Distance formula | Behaviour |
+|---------|-----------------|-----------|
+| **Single** | $\min_{i \in A,\, j \in B} d(i,j)$ | Sensitive to chaining; produces elongated clusters |
+| **Complete** | $\max_{i \in A,\, j \in B} d(i,j)$ | Tends to produce compact, equally-sized clusters |
+| **Average** | $\frac{1}{\|A\|\|B\|} \sum_{i \in A} \sum_{j \in B} d(i,j)$ | Compromise between single and complete; robust |
+| **Ward's** | Increase in total WCSS after merging | Minimises within-cluster variance; compact, balanced clusters |
+
+## Comparing Linkage Methods
+
+We start by computing the Euclidean distance matrix on the top 50 PCs:
+
+```{r hclust_dist}
+dist_pc_hc <- dist(PC, method = "euclidean")
+```
+
+We then build a dendrogram for each linkage method and summarise their quality with the **cophenetic correlation coefficient** — a measure of how faithfully the dendrogram preserves the original pairwise distances. Higher values (range 0–1) indicate that the dendrogram is a more accurate representation of the distance structure:
+
+::: {.callout-note}
+## Cophenetic correlation coefficient
+
+For two observations $i$ and $j$, the **cophenetic distance** is the height at which they first merge in the dendrogram — i.e. the dissimilarity at which they are placed in the same cluster. The **cophenetic correlation coefficient** is simply the Pearson correlation between all pairwise original distances $d(i,j)$ and all corresponding cophenetic distances. A value close to 1 means the dendrogram faithfully reflects the original distance structure; a value well below 1 means the dendrogram distorts the distances significantly.
+
+Note that a high cophenetic correlation does not necessarily mean the clusters are biologically meaningful — it only tells us that the tree is a good summary of the pairwise distances.
+:::
+
+```{r hclust_compare}
+hc_single   <- hclust(d = dist_pc_hc, method = "single")
+hc_complete <- hclust(d = dist_pc_hc, method = "complete")
+hc_average  <- hclust(d = dist_pc_hc, method = "average")
+hc_ward     <- hclust(d = dist_pc_hc, method = "ward.D2")
+
+coph <- sapply(
+  list(Single = hc_single, Complete = hc_complete,
+       Average = hc_average, Ward = hc_ward),
+  function(hc) round(cor(dist_pc_hc, cophenetic(hc)), 4)
+)
+cat("Cophenetic correlation coefficients:\n")
+print(coph)
+```
+
+Average linkage typically achieves the highest cophenetic correlation because it
+merges clusters based on the mean of all pairwise distances, which is a
+less extreme summary than the minimum (single) or maximum (complete) and
+therefore tends to distort the original distance structure less. Ward's linkage
+optimises a different objective — minimising within-cluster variance — so its
+cophenetic correlation may be lower, yet it often produces the most
+biologically interpretable, compact clusters for gene expression data.
+
+```{r hclust_dendrograms, fig.width=14, fig.height=5}
+par(mfrow = c(1, 4), mar = c(2, 4, 3, 1))
+plot(hc_single,   main = "Single",   labels = FALSE, xlab = "", sub = "")
+plot(hc_complete, main = "Complete", labels = FALSE, xlab = "", sub = "")
+plot(hc_average,  main = "Average",  labels = FALSE, xlab = "", sub = "")
+plot(hc_ward,     main = "Ward's",   labels = FALSE, xlab = "", sub = "")
+par(mfrow = c(1, 1))
+```
+
+The dendrograms illustrate the characteristic behaviour of each linkage method:
+
+- **Single linkage** shows pronounced **chaining**: a few large clusters grow
+  by absorbing one point at a time, producing an unbalanced, elongated tree.
+  This is a well-known artefact of single linkage, making it rarely suitable
+  for gene expression data.
+- **Complete linkage** produces a more balanced tree, but can force distant
+  points into the same cluster when no intermediate points bridge them. Can also over-separate data.
+- **Average linkage** is a compromise: more balanced than single, less extreme
+  than complete, and typically robust to outliers.
+- **Ward's linkage** produces the most compact and balanced tree, with clearly
+  defined splits at low heights. This is the reason Ward's is the default
+  choice in most genomic clustering workflows.
+
+
+::: {.callout-note}
+
+## Balanced trees
+
+A dendrogram is “balanced” when splits occur at similar heights and produce clusters of comparable size.
+
+✅ Balanced tree
+
+- Merges happen at gradually increasing heights
+- Branches split into similar-sized subtrees
+- No long "chains"
+- Suggests reasonably separable groups
+
+❌ Unbalanced tree
+
+- One branch keeps merging one point at a time
+- Long vertical lines (late merges)
+- Very uneven cluster sizes
+- Suggests continuum/gradual transitions (or noisy/poorly separable structure)
+
+⚠️ A **balanced tree** is not necessary better biologically (biological truth ≠ algorithmic symmetry).
+
+:::
+
+
+::: {.callout-note}
+
+## Linkage methods
+
+Different linkage methods impose different geometric assumptions on the data. The resulting dendrogram structure reflects these assumptions as much as the underlying biology.
+
+In our scenario, we might expect:
+
+- **Single linkage** produces elongated, chain-like clusters, and could artificially connect Luminal → HER2 → Basal even if biologically distinct.
+
+- **Complete linkage** produces compact, spherical clusters. It likely keeps Basal tight, but could split Luminal subtypes more than biologically justified.
+
+- **Average linkage** produces compact clusters (but less extremes than complete). It likely separates Basal well, might partially mix LumA/LumB.
+
+- **Ward's linkage** produces the most compact, balanced, and spherical clusters. It could align well with the PAM50 subtypes.
+:::
+
+## Cutting the Dendrogram
+
+We proceed with Ward's linkage and cut the dendrogram into **K = 5 clusters**
+using `cutree()`, to match the number of known PAM50 subtypes:
+
+```{r hclust_cut, fig.width=8, fig.height=5}
+hc_clusters <- cutree(hc_ward, k = 5)
+cat("Cluster sizes (Ward's, K = 5):\n")
+print(table(hc_clusters))
+
+# Visualise the dendrogram with the cut
+plot(hc_ward, main = "Ward's Linkage — cut at K = 5",
+     labels = FALSE, xlab = "", sub = "")
+rect.hclust(hc_ward, k = 5, border = RColorBrewer::brewer.pal(5, "Set1"))
+```
+
+The `rect.hclust()` function draws coloured rectangles around the five groups
+defined by the cut. Notice that the groups have very different sizes — this
+reflects the class imbalance in the data (522 Luminal A vs. 36 Normal-like),
+which Ward's linkage tends to preserve.
+
+## Visualisation
+
+```{r hclust_plot, fig.width=7, fig.height=5}
+df_hc <- data.frame(
+  PC1     = pca_2d$PC1, PC2 = pca_2d$PC2,
+  Cluster = factor(hc_clusters),
+  Subtype = tcga_brca_sample_metadata$subtype
+)
+
+ggplot(df_hc, aes(x = PC1, y = PC2, colour = Cluster, shape = Subtype)) +
+  geom_point(size = 1.2, alpha = 0.7) +
+  scale_colour_manual(
+    values = setNames(RColorBrewer::brewer.pal(5, "Set1"), as.character(1:5))
+  ) +
+  scale_shape_manual(values = c(16, 17, 15, 3, 7)) +
+  stat_ellipse(aes(group = Cluster), type = "norm", linetype = 2) +
+  labs(
+    title = "Hierarchical Clustering (Ward's, K = 5)",
+    x     = paste0("PC1 (", var_pct[1], "%)"),
+    y     = paste0("PC2 (", var_pct[2], "%)")
+  ) +
+  theme_bw()
+```
+
+Compare this plot with the PCA baseline coloured by PAM50 subtypes. The cluster structure partially mirrors the subtype organisation: the Basal-like region (bottom-right in the PCA space) tends to be captured as a single, well-defined cluster, while the Luminal and HER2 regions are subdivided into multiple overlapping clusters. 
+
+The degree of alignment between colours (clusters) and shapes (subtypes) provides a visual indication of how well Ward’s hierarchical clustering recovers the underlying biological labels. Strong agreement is observed for Basal-like tumours, whereas the Luminal and HER2 subtypes show substantial mixing, reflecting their closer proximity in gene expression space.
+
+## Evaluation
+
+We evaluate the Ward's K=5 solution using a contingency table, silhouette
+width, and ARI — the same metrics used for K-means, allowing a direct
+comparison:
+
+```{r hclust_eval}
+cat("Contingency table (HC Ward's K=5 vs PAM50):\n")
+print(table(Cluster = hc_clusters,
+            Subtype = tcga_brca_sample_metadata$subtype))
+
+sil_hc <- cluster::silhouette(hc_clusters, dist_pc)
+ari_hc <- mclust::adjustedRandIndex(hc_clusters,
+                                     tcga_brca_sample_metadata$subtype)
+
+cat("\nAverage silhouette width:", round(mean(sil_hc[, "sil_width"]), 4), "\n")
+cat("ARI (HC Ward's K=5)     :", round(ari_hc, 4), "\n")
+```
+
+```{r hclust_eval_vals, echo=FALSE}
+avg_sil_hc <- round(mean(sil_hc[, "sil_width"]), 4)
+```
+
+The contingency table reveals a clear pattern. **Cluster 4** is the most
+biologically pure: 153 out of 166 samples (92%) are Basal-like, making it a
+near-perfect recovery of this subtype. This is expected — Basal-like tumours
+are transcriptionally the most distinct subtype, largely driven by the absence of ER signalling and high proliferation.
+
+The remaining four clusters carve up the Luminal + HER2 space:
+
+- **Cluster 3** is predominantly Luminal A (213/244, 87%), with 22 Normal-like
+  samples also captured here. The close placement of Normal-like with LumA
+  mirrors what we observed in K-means: their transcriptional profiles are
+  similar enough that they cluster together. Remember that this reflects their 
+  proximity in expression space rather than shared tumour identity: Normal-like 
+  samples often have a higher proportion of normal tissue signal, which places 
+  them closer to Luminal A profiles under distance-based clustering.
+- **Cluster 1** mixes Luminal A (85) and Luminal B (62) in a roughly 60/40
+  split — neither is dominant enough to call this a "pure" cluster. This is
+  the most ambiguous region of the PCA space.
+- **Cluster 2** is the most heterogeneous: Luminal A (191), Luminal B (116),
+  and HER2-enriched (52) all co-occur. This cluster captures samples with 
+  intermediate transcriptional profiles between Luminal and HER2-enriched subtypes,
+  reflecting the partial overlap between these groups.
+- **Cluster 5** contains 20 Basal-like samples alongside 33 LumA and smaller
+  numbers of other subtypes — it likely represents a set of samples with mixed or
+  intermediate expression profiles, or a boundary region that is forced into a 
+  separate cluster under the K = 5 partition.
+
+Comparing these results to K-means (K=5): both methods recover a clean Basal cluster and struggle with the Luminal region. The main structural difference is that Ward’s hierarchical clustering tends to produce more evenly sized and variance-balanced clusters, particularly within the Luminal region, while K-means can produce one very large LumA-dominated cluster (Cluster 2 in the K-means result, with 275 LumA samples).
+
+Quantitatively, the Ward’s K = 5 solution shows lower agreement with PAM50 subtypes compared to K-means, as reflected by a lower ARI (0.22 vs 0.33) and a reduced average silhouette width. This suggests that, for this dataset, K-means provides a partition that is more consistent with the known subtype structure.
+
+This difference highlights that the choice of clustering algorithm influences the recovered structure, as each method imposes different assumptions on cluster shape and separation.
+
+::: {.callout-caution icon="false"}
+## ✏️ Exercise 3: Heatmap of cluster expression profiles
+
+A classical way to visualise hierarchical clustering results in genomics is a
+**heatmap** with the dendrogram alongside. Using `ComplexHeatmap`:
+
+1. Take the **top 50 most variable genes** in `tcga_brca_log2_tpm`.
+2. Draw a heatmap (genes × samples) annotating the columns with the HC Ward's
+   cluster assignment and the PAM50 subtype.
+
+*Hint*: use `HeatmapAnnotation()` for the column annotation. To select the top
+50 genes by SD, use `head(order(apply(..., 2, sd), decreasing = TRUE), 50)`.
+:::
+
+::: {.callout-tip collapse="true" icon="false"}
+## 💡 Solution
+
+```{r ex3_solution, fig.width=10, fig.height=7}
+# Top 50 most variable genes
+top50_idx <- head(order(apply(tcga_brca_log2_tpm, 2, sd),
+                         decreasing = TRUE), 50)
+mat_top50 <- t(tcga_brca_log2_tpm[, top50_idx])  # genes × samples
+
+# Column annotation: HC cluster + PAM50 subtype
+ann_col <- ComplexHeatmap::HeatmapAnnotation(
+  Cluster = factor(hc_clusters),
+  PAM50   = tcga_brca_sample_metadata$subtype,
+  col     = list(
+    Cluster = setNames(RColorBrewer::brewer.pal(5, "Set1"),
+                       as.character(1:5)),
+    PAM50   = pal_subtype
+  )
+)
+
+ComplexHeatmap::Heatmap(
+  matrix            = mat_top50,
+  name              = "log2(TPM+1)",
+  top_annotation    = ann_col,
+  show_column_names = FALSE,
+  show_row_names    = TRUE,
+  row_names_gp      = grid::gpar(fontsize = 7),
+  cluster_columns   = hc_ward,
+  cluster_rows      = TRUE,
+  col               = circlize::colorRamp2(
+    c(0, 4, 10), c("navy", "white", "firebrick")
+  ),
+  column_title = "TCGA BRCA — Top 50 Variable Genes"
+)
+```
+
+The heatmap reveals co-expressed gene modules that vary systematically across
+clusters. Because the columns (samples) are ordered by the Ward's dendrogram,
+samples within the same cluster appear adjacent, and the annotation bars at the
+top allow you to check alignment between clusters (colours) and PAM50 subtypes.
+
+A few specific patterns worth noting:
+
+- **Cluster 4** (dominated by Basal-like) should stand out as a visually
+  distinct block — the top 50 most variable genes include many that are
+  differentially expressed between Basal-like and Luminal subtypes, so you
+  would expect to see a clear colour contrast for this group (e.g. genes highly
+  expressed in Basal but not Luminal, or vice versa).
+- The **Luminal clusters** (1, 2, 3) show more similar expression profiles to each other. Subtle
+  differences in gene expression between these clusters reflect the finer
+  distinctions between Luminal A, Luminal B, and HER2-enriched subtypes.
+- **Cluster 5** (the transitional Basal/Luminal boundary cluster) may show an
+  intermediate expression pattern — neither fully Basal-like nor fully Luminal
+  — consistent with its mixed subtype composition in the contingency table.
+:::
+
+# DBSCAN
+
+**Density-Based Spatial Clustering of Applications with Noise (DBSCAN)** takes a fundamentally different approach from K-means and hierarchical clustering. It defines clusters as **dense regions** in the feature space separated by areas of lower point density. Its key properties are:
+
+- **No prior $K$**: the number of clusters is determined automatically by the density structure of the data.
+- **Arbitrary shapes**: unlike K-means, DBSCAN can find clusters that are not spherical — elongated, curved, or interleaved shapes are all possible.
+- **Explicit noise**: points in sparse regions are not forced into a cluster; they are labelled as **noise** (cluster 0). This is useful for identifying outlier samples.
+
+DBSCAN classifies each point into one of three categories based on two parameters, **`eps`** (ε) and **`minPts`**:
+
+- **Core point** — has at least `minPts` neighbours within radius ε. Core points form the interior of a cluster.
+- **Border point** — within ε of a core point, but has fewer than `minPts`neighbours. Border points are on the edge of a cluster.
+- **Noise point** — not within ε of any core point. Labelled as cluster 0.
+
+Two core points belong to the same cluster if they are within ε of each other; border points are assigned to the cluster of the nearest core point.
+
+::: {.callout-note}
+## Why run DBSCAN on PCA-reduced data?
+
+In high-dimensional spaces the curse of dimensionality makes all pairwise distances similar, blurring the contrast between dense and sparse regions that DBSCAN relies on. Running DBSCAN on the top 50 PCs — rather than all 4,000 genes — partially restores the density contrast and makes the algorithm more effective.
+
+A second important consequence is that **distances in a 50-dimensional space are much larger in absolute terms than in a 2D space**. To see why intuitively: consider a unit hypercube in $d$ dimensions. The diagonal of this cube has length $\sqrt{d}$, so as $d$ grows, two points that are far apart in many dimensions simultaneously can be very far apart in Euclidean distance. In practice, typical nearest-neighbour distances in a 50-PC space are on the order of tens of units, whereas in a 2D scatter plot they would be on the order of single units (if the axes are on similar scales). This means the `eps` parameter — which sets the neighbourhood radius — must be set to a much larger value than you would use for 2D data. Always inspect the k-NN distance plot to calibrate `eps` for your specific dimensionality.
+:::
+
+## Choosing ε: the k-NN Distance Plot
+
+A principled approach to choosing `eps` is the **k-nearest-neighbour (k-NN) distance plot**. For each point, we compute the distance to its $k$-th nearest neighbour, sort these values in ascending order, and plot them. The **knee** of the resulting curve — the point where the slope begins to increase more rapidly — provides a heuristic separation between relatively dense regions and sparser areas of the data:
+
+- **Below the knee**: points are in dense regions; their $k$-th nearest   neighbour is close. These points will be core points for the right `eps`.
+- **Above the knee**: points are in sparse regions or isolated; their $k$-th nearest neighbour is far. These points will be labelled as noise.
+
+A common choice is $k = \text{minPts} - 1$.
+
+
+::: {.callout-note}
+
+In practice, especially in high-dimensional spaces, this transition is often gradual rather than sharp, so the choice of `eps` remains approximate.
+
+:::
+
+```{r dbscan_knn, fig.width=7, fig.height=4}
+dbscan::kNNdistplot(PC, k = 4)
+title("k-NN Distance Plot (k = 4) — Top 50 PCs")
+```
+
+```{r dbscan_eps_vals, echo=FALSE}
+knn_dists <- sort(dbscan::kNNdist(PC, k = 4))
+# Use plain numeric values to avoid named-quantile rowname issues downstream
+eps_knee  <- as.numeric(round(quantile(knn_dists, 0.10), 0))
+eps_mid   <- as.numeric(round(quantile(knn_dists, 0.50), 0))
+```
+
+In this 50-dimensional PCA space, the 4th-nearest-neighbour distances range from approximately `r round(min(knn_dists))` to `r round(max(knn_dists))`, with a median of `r eps_mid`. These are much larger numbers than one would encounter in a 2D scatter plot — a direct consequence of the higher dimensionality, as discussed in the callout above.
+
+To choose `eps`, we look for the **knee** of the k-NN distance curve. The idea is as follows: we sort all samples by their 4th-nearest-neighbour distance and plot them in ascending order. Samples in dense regions have a small 4th-NN distance (their 4 closest neighbours are nearby); samples in sparse or transitional regions have a large 4th-NN distance (they have to reach far to find their 4th neighbour). The knee of the curve is the inflection point that separates these two regimes — a natural threshold for ε.
+
+We mark two candidate values:
+
+- **ε = `r eps_knee`** — the 10th percentile of the 4-NN distances. This means only 10% of all samples have their 4th nearest neighbour within this radius, so the definition of "dense" is strict. Samples must be in a genuinely tight neighbourhood to be considered core points; the majority will be labelled noise.
+- **ε = `r eps_mid`** — the 50th percentile (median). Half of all samples have their 4th nearest neighbour within this radius. This is a looser definition of density; more samples qualify as core points, larger clusters form, and fewer points are flagged as noise.
+
+```{r dbscan_eps_line, fig.width=7, fig.height=4}
+dbscan::kNNdistplot(PC, k = 4)
+abline(h = eps_knee, col = "red",    lty = 2, lwd = 1.5)
+abline(h = eps_mid,  col = "orange", lty = 2, lwd = 1.5)
+legend("topleft",
+       legend = c(paste0("eps = ", eps_knee, " (10th percentile, stricter)"),
+                  paste0("eps = ", eps_mid,  " (50th percentile, looser)")),
+       col = c("red", "orange"), lty = 2, bty = "n")
+title("k-NN Distance Plot (k = 4) — candidate eps values")
+```
+
+We start with **ε = `r eps_knee`** as it is near the visible inflection point of the curve. Be aware that with this value, many samples will be labelled as noise — this is an inherent property of the data structure, not a sign of a bug, and we will discuss it further after running the algorithm.
+
+## Running DBSCAN
+
+We run DBSCAN using the `dbscan()` function from the `dbscan` package, with ε = `r eps_knee` and `minPts = 5`:
+
+```{r dbscan_run}
+set.seed(5381L)
+
+db_res <- dbscan::dbscan(x = PC, eps = eps_knee, minPts = 5)
+
+cat("Number of clusters found:", max(db_res$cluster), "\n")
+cat("Noise points:", sum(db_res$cluster == 0), "/", nrow(PC), "\n")
+cat("Cluster assignment table:\n")
+print(table(db_res$cluster))
+```
+
+::: {.callout-note}
+
+A small value of `minPts = 5` is commonly used in moderate-dimensional settings, though in higher-dimensional spaces larger values are sometimes preferred to stabilise density estimates.
+
+:::
+
+The result reveals a fundamental characteristic of this dataset: with ε = `r eps_knee`, the vast majority of samples (~77%) are labelled as **noise**.
+This is not a failure of the algorithm — it is an accurate description of the data's density structure. The PCA space for this breast cancer cohort does not contain multiple well-separated, compact, equally-dense clusters. Instead, it is dominated by a broad Luminal region, within which Luminal A samples form the most consistently dense area under the chosen distance metric.
+
+DBSCAN at this ε identifies this region as the primary cluster, while treating much of the remaining space — including transitional areas and less densely packed subtypes — as noise. Smaller clusters correspond to local density peaks rather than globally distinct groups.
+
+This is an important lesson: **DBSCAN works best when the data contain genuinely separated dense regions with clear low-density gaps between them** (think of isolated islands). In contrast, gene expression data for breast cancer subtypes form a continuum with gradual changes in transcriptional profiles and density. In such settings, DBSCAN tends to either label a large fraction of points as noise (for small ε) or merge large portions of the data into a single cluster (for large ε), making it less suitable than methods such as K-means or hierarchical clustering.
+
+::: {.callout-note}
+
+## Clustering in gradual density variation
+
+When the data form a continuum with gradual density variation — as is common with molecular subtypes in gene expression space — K-means or hierarchical clustering are more appropriate choices.
+
+::: 
+
+## Visualisation
+
+```{r dbscan_plot, fig.width=7, fig.height=5}
+n_db_clust <- max(db_res$cluster)
+
+# Build a colour palette: grey for noise (0), Set1 for clusters
+db_pal <- c(
+  "0" = "grey70",
+  setNames(
+    RColorBrewer::brewer.pal(max(n_db_clust, 3), "Set1"),
+    as.character(seq_len(n_db_clust))
+  )
+)
+
+df_db <- data.frame(
+  PC1     = pca_2d$PC1, PC2 = pca_2d$PC2,
+  Cluster = factor(db_res$cluster),
+  Subtype = tcga_brca_sample_metadata$subtype
+)
+
+ggplot(df_db, aes(x = PC1, y = PC2, colour = Cluster, shape = Subtype)) +
+  geom_point(size = 1.2, alpha = 0.7) +
+  scale_colour_manual(
+    values = db_pal,
+    labels = c("0" = "Noise",
+               setNames(paste0("Cluster ", seq_len(n_db_clust)),
+                        as.character(seq_len(n_db_clust))))
+  ) +
+  scale_shape_manual(values = c(16, 17, 15, 3, 7)) +
+  labs(
+    title  = paste0("DBSCAN (eps = ", eps_knee, ", minPts = 5) — TCGA BRCA"),
+    x      = paste0("PC1 (", var_pct[1], "%)"),
+    y      = paste0("PC2 (", var_pct[2], "%)"),
+    colour = "Cluster", shape = "PAM50"
+  ) +
+  theme_bw()
+```
+
+The grey points labelled as **noise** (cluster 0) dominate the plot — this is consistent with the explanation above. The small numbered clusters correspond to the densest pockets of the data. Cluster 1, the largest real cluster, is dominated by **Luminal A** samples — the most abundant subtype, which forms the densest region in the PCA space. The remaining clusters (2–8) are very small and may correspond to local density peaks within subtype groups or to boundary regions between subtypes.
+
+When looking at this plot, compare the location of the non-noise clusters against the PAM50 subtype shapes. The fact that Cluster 1 is almost entirely composed of Luminal A samples tells us that DBSCAN is detecting the most consistently dense region under the chosen parameters, rather than recovering all biologically defined subtypes.
+
+## Evaluation
+
+We evaluate the non-noise clusters against the known PAM50 labels:
+
+```{r dbscan_eval}
+non_noise <- db_res$cluster != 0
+
+cat("Contingency table (DBSCAN vs PAM50, noise excluded):\n")
+print(table(
+  Cluster = db_res$cluster[non_noise],
+  Subtype = tcga_brca_sample_metadata$subtype[non_noise]
+))
+
+if (max(db_res$cluster) >= 2 && sum(non_noise) > 0) {
+  sil_db <- cluster::silhouette(db_res$cluster[non_noise],
+                                  dist(PC[non_noise, ]))
+  ari_db <- mclust::adjustedRandIndex(
+    db_res$cluster[non_noise],
+    tcga_brca_sample_metadata$subtype[non_noise]
+  )
+  cat("\nAverage silhouette width (non-noise):",
+      round(mean(sil_db[, "sil_width"]), 4), "\n")
+  cat("ARI (DBSCAN, non-noise)             :",
+      round(ari_db, 4), "\n")
+} else {
+  cat("DBSCAN found fewer than 2 clusters — try adjusting eps or minPts.\n")
+  ari_db <- NA
+  sil_db <- NULL
+}
+```
+
+The contingency table confirms that Cluster 1 is almost entirely Luminal A, while the other small clusters contain mixed subtypes or isolated subtype fragments. 
+
+The very low silhouette width further indicates that even within the retained clusters, separation is weak and cluster assignments are not well defined.
+
+While the ARI appears relatively high (`r round(ari_db, 2)`), note that this value is computed only on `r sum(db_res$cluster != 0)` non-noise samples — this ARI is not directly comparable to the values obtained for K-means or hierarchical clustering, which assign every sample to a cluster.
+
+::: {.callout-caution icon="false"}
+## ✏️ Exercise 4: Tuning DBSCAN parameters
+
+Systematically explore the following parameter grid:
+
+- `eps` ∈ {33, 35, 36, 38}
+- `minPts` ∈ {3, 5, 10}
+
+These values are all in the neighbourhood of the k-NN distance curve knee.
+For each combination, record: the number of clusters, the number of noise
+points, and the ARI against PAM50 subtypes (excluding noise). Print the results
+sorted by ARI (descending) and comment on what you observe.
+
+*Hint*: wrap the logic in a helper function. Use `as.numeric()` on the `eps`
+values passed to `data.frame()` to avoid named-vector rowname issues.
+:::
+
+
+::: {.callout-tip collapse="true" icon="false"}
+## 💡 Solution
+
+```{r ex4_solution}
+run_dbscan_eval <- function(data, eps, minPts, true_labels) {
+  res       <- dbscan::dbscan(data, eps = eps, minPts = minPts)
+  n_clust   <- max(res$cluster)
+  n_noise   <- sum(res$cluster == 0)
+  non_noise <- res$cluster != 0
+
+  ari <- if (n_clust >= 2 && sum(non_noise) > 0) {
+    round(mclust::adjustedRandIndex(
+      res$cluster[non_noise],
+      as.integer(factor(true_labels[non_noise]))
+    ), 4)
+  } else { NA }
+
+  # Use as.numeric() to prevent quantile names becoming rownames
+  data.frame(eps        = as.numeric(eps),
+             minPts     = as.numeric(minPts),
+             n_clusters = n_clust,
+             n_noise    = n_noise,
+             ARI        = ari)
+}
+
+params     <- expand.grid(eps = c(33, 35, 36, 38), minPts = c(3, 5, 10))
+results_db <- do.call(rbind, Map(
+  f = function(e, m) run_dbscan_eval(PC, e, m,
+                                      tcga_brca_sample_metadata$subtype),
+  e = params$eps, m = params$minPts
+))
+rownames(results_db) <- NULL  # clean sequential rownames
+
+print(results_db[order(-results_db$ARI, results_db$n_noise), ])
+```
+
+Several patterns are visible in the results:
+
+- **The highest ARI values occur with small `eps` and small `minPts`** (e.g.
+  `eps=33`, `minPts=3`: ARI ≈ 0.67; `eps=35`, `minPts=5`: ARI ≈ 0.66). This
+  may seem counterintuitive at first: with strict parameters, most samples are
+  labelled as noise (600–700 out of 996), yet the ARI on the retained samples
+  is high. The reason is that only the densest cores of each subtype group are
+  retained as clusters — these are the most "typical" representatives of each
+  subtype, with the highest cluster purity. The ARI is therefore computed on a
+  highly selected, unrepresentative subset of the data.
+
+- **Larger `minPts` with small `eps`** (e.g. `eps=33`, `minPts=10`) produces
+  very few clusters (here, 2) with an ARI near zero or negative, because the
+  strict core-point definition merges distant groups together in unexpected ways.
+
+- **Larger `eps`** (38+) reduces noise but merges adjacent subtypes into the
+  same cluster, lowering the ARI as cluster purity decreases.
+
+The key takeaway is that maximising ARI in DBSCAN requires discarding most of
+the data as noise — which is not a useful outcome for exploratory analysis. This
+reinforces the earlier conclusion that DBSCAN is not the best tool for this
+dataset's density structure.
+:::
+
+# Method Comparison
+
+## Visual Comparison
+
+We bring all three methods together in a side-by-side PCA plot, using point shapes to show the PAM50 ground truth:
+
+```{r comparison_plot, fig.width=14, fig.height=5}
+df_cmp <- data.frame(
+  PC1     = pca_2d$PC1, PC2 = pca_2d$PC2,
+  Subtype = tcga_brca_sample_metadata$subtype,
+  KMeans  = factor(res_km5$cluster),
+  HClust  = factor(hc_clusters),
+  DBSCAN  = factor(db_res$cluster)
+)
+
+make_clust_plot <- function(df, clust_col, title_str) {
+  n_lev <- nlevels(df[[clust_col]])
+  # Noise (level "0") gets grey; all other levels get Set1 colours
+  has_noise <- "0" %in% levels(df[[clust_col]])
+  n_real    <- n_lev - as.integer(has_noise)
+  real_cols <- setNames(
+    RColorBrewer::brewer.pal(max(n_real, 3), "Set1")[seq_len(n_real)],
+    levels(df[[clust_col]])[levels(df[[clust_col]]) != "0"]
+  )
+  pal <- if (has_noise) c("0" = "grey70", real_cols) else real_cols
+
+  ggplot(df, aes_string(x = "PC1", y = "PC2",
+                        colour = clust_col, shape = "Subtype")) +
+    geom_point(size = 1.2, alpha = 0.6) +
+    scale_colour_manual(values = pal, name = "Cluster") +
+    scale_shape_manual(values = c(16, 17, 15, 3, 7)) +
+    labs(title = title_str,
+         x = paste0("PC1 (", var_pct[1], "%)"),
+         y = paste0("PC2 (", var_pct[2], "%)")) +
+    theme_bw()
+}
+
+make_clust_plot(df_cmp, "KMeans", "K-means (K = 5)") +
+make_clust_plot(df_cmp, "HClust", "Hierarchical (Ward's, K = 5)") +
+make_clust_plot(df_cmp, "DBSCAN", paste0("DBSCAN (eps = ", eps_knee, ")"))
+```
+
+Comparing the three panels highlights the different ways each method carves the data:
+
+- **K-means** and **hierarchical clustering** (both K = 5) produce broadly similar partitions because both are optimising a distance-based criterion on the same 50-PC input. Their main differences lie in the exact boundaries, especially in the densely overlapping Luminal region.
+- **DBSCAN** produces a very different partition: most samples are labelled as noise, while only a subset of points in the densest regions form clusters. Its cluster assignments are driven by local density rather than distance to a centroid, meaning it identifies only the most tightly packed regions of the data and ignores large portions of the continuum.
+
+## Quantitative Summary
+
+```{r comparison_table}
+avg_sil_db  <- if (!is.null(sil_db)) round(mean(sil_db[, "sil_width"]), 4) else NA
+ari_db_val  <- if (!is.na(ari_db))   round(ari_db, 4) else NA
+
+tbl <- data.frame(
+  Method = c(
+    paste0("K-means (K = ", best_k_sil, ", data-driven)"),
+    "K-means (K = 5, biology-driven)",
+    "Hierarchical — Ward's (K = 5)",
+    paste0("DBSCAN (eps = ", eps_knee, ")")
+  ),
+  ARI = c(round(ari_km_opt, 4), round(ari_km5, 4),
+          round(ari_hc, 4),     ari_db_val),
+  Avg_Silhouette = c(avg_sil_opt, avg_sil_5, avg_sil_hc, avg_sil_db),
+  Noise = c("—", "—", "—", sum(db_res$cluster == 0))
+)
+
+knitr::kable(
+  tbl,
+  col.names = c("Method", "ARI vs PAM50", "Avg Silhouette", "Noise Points"),
+  align = "lrrr"
+)
+```
+
+A few points worth emphasising when reading this table:
+
+- **ARI and silhouette measure different things.** The silhouette is a purely internal metric — it evaluates cluster geometry without any knowledge of labels. The ARI is an external metric — it measures agreement with the biological ground truth. A high silhouette with a low ARI means the clusters are compact and well-separated, but do not align well with the PAM50 subtypes. A low silhouette with a moderate ARI often indicates that the biological groups overlap in feature space (as is the case for Luminal A vs Luminal B), but the clustering still captures meaningful biological structure.
+
+- **The data-driven K (K = `r best_k_sil`) typically achieves a higher silhouette** than K = 5, because it maximises geometric separation and compactness. However, this partition reflects the dominant structure in the data (e.g. ER-driven separation) rather than the finer-grained PAM50 subtype distinctions, which can result in a lower ARI when compared to K = 5.
+
+- **DBSCAN metrics are not directly comparable to the other methods.** Both ARI and silhouette are computed only on the subset of non-noise samples (~23% of the dataset), which correspond to the densest and most easily separable points. This can artificially inflate agreement with PAM50 labels, as the most ambiguous samples are excluded from the evaluation.
+
+Taken together, these results highlight that different clustering algorithms recover different aspects of the same underlying biological structure: K-means and Ward capture the global organisation of the data, while DBSCAN isolates only the most densely populated regions. No single method fully recovers the PAM50 subtypes, reflecting the fact that breast cancer transcriptomic profiles form a continuum rather than a set of perfectly separable groups.
+
+::: {.callout-note}
+## Choosing a clustering method
+
+| Method | Strengths | Weaknesses |
+|--------|-----------|------------|
+| **K-means** | Fast, scalable, simple to tune | Requires $K$; assumes spherical clusters |
+| **Hierarchical** | Dendrogram reveals nested structure; no $K$ required upfront | Slow for large $n$; sensitive to linkage choice |
+| **DBSCAN** | Arbitrary shapes; identifies noise | Sensitive to `eps`/`minPts`; struggles in high dimensions |
+
+In genomics, **K-means or hierarchical clustering on PCA-reduced data** is the
+most common workflow. DBSCAN is useful when clusters may have irregular shapes
+(e.g. spatial transcriptomics) or when identifying outlier samples is important.
+
+**ARI requires ground-truth labels** — unavailable in truly unsupervised
+settings. When labels are absent, use internal metrics (silhouette,
+Calinski–Harabász, Davies–Bouldin) alongside domain knowledge.
+:::
+
+::: {.callout-caution icon="false"}
+## ✏️ Exercise 5: PAM50 marker genes
+
+For each K-means cluster (K = 5), compute the **mean expression** of the
+following PAM50 marker genes (all present in this dataset): *ESR1*, *ERBB2*,
+*MKI67*, *FOXA1*, *AURKA*, *EGFR*, *PGR*, *CDH1*. Display the result as a
+heatmap annotated with the dominant PAM50 subtype per cluster. Do the expression
+profiles match the expected biology of each subtype?
+:::
+
+::: {.callout-tip collapse="true" icon="false"}
+## 💡 Solution
+
+```{r ex5_solution, fig.width=7, fig.height=4}
+marker_genes <- c("ESR1", "ERBB2", "MKI67", "FOXA1",
+                  "AURKA", "EGFR", "PGR", "CDH1")
+available    <- intersect(marker_genes, colnames(tcga_brca_log2_tpm))
+cat("Marker genes found in dataset:", paste(available, collapse = ", "), "\n")
+
+# Mean expression per K-means cluster
+mean_expr <- do.call(rbind, lapply(sort(unique(res_km5$cluster)), function(k) {
+  idx <- res_km5$cluster == k
+  colMeans(tcga_brca_log2_tpm[idx, available, drop = FALSE])
+}))
+rownames(mean_expr) <- paste0("Cluster ", sort(unique(res_km5$cluster)))
+
+# Dominant PAM50 subtype per cluster
+dom_subtype <- sapply(sort(unique(res_km5$cluster)), function(k) {
+  idx <- res_km5$cluster == k
+  names(sort(table(tcga_brca_sample_metadata$subtype[idx]),
+             decreasing = TRUE))[1]
+})
+names(dom_subtype) <- paste0("Cluster ", sort(unique(res_km5$cluster)))
+cat("Dominant subtype per cluster:\n")
+print(dom_subtype)
+
+row_ann <- ComplexHeatmap::rowAnnotation(
+  `Dominant\nSubtype` = dom_subtype,
+  col = list(`Dominant\nSubtype` = pal_subtype)
+)
+
+ComplexHeatmap::Heatmap(
+  matrix           = mean_expr,
+  name             = "Mean\nlog2(TPM+1)",
+  right_annotation = row_ann,
+  cluster_rows     = TRUE,
+  cluster_columns  = TRUE,
+  col              = circlize::colorRamp2(
+    c(0, 5, 12), c("navy", "white", "firebrick")
+  ),
+  column_title    = "PAM50 Marker Genes — Mean Expression per Cluster",
+  row_names_gp    = grid::gpar(fontsize = 10),
+  column_names_gp = grid::gpar(fontsize = 10)
+)
+```
+
+Three of the five K-means clusters are dominated by **Luminal A**, one by
+**Luminal B** (Cluster 3), and one by **Basal-like** (Cluster 5). This
+distribution reflects the class imbalance in the dataset (522 LumA vs. 177
+Basal) and the transcriptional similarity among Luminal subtypes.
+
+Looking at the mean expression values, several biologically meaningful patterns
+emerge:
+
+- **Cluster 5 (Basal-like dominant)** shows the highest *EGFR* (4.73) and
+  *MKI67* (5.70) expression, and the lowest *ESR1* (1.43), *PGR* (0.53), and
+  *FOXA1* (2.32) — consistent with the triple-negative, high-proliferation
+  phenotype of Basal-like tumours. These are all well-established markers of the Basal-like
+  subtype, and each has a specific biological interpretation:
+  - *ESR1* encodes the oestrogen receptor (ER). Low *ESR1* means the tumour is
+    ER-negative and does not depend on oestrogen signalling for growth — a
+    defining feature of Basal-like (triple-negative) tumours and the reason they
+    do not respond to hormone therapies such as tamoxifen.
+  - *PGR* encodes the progesterone receptor (PR). Similarly, low *PGR* confirms
+    PR-negative status. Together with ER-negative and HER2-negative status, this
+    defines the triple-negative phenotype.
+  - *FOXA1* is a transcription factor that acts as a pioneer factor for ER
+    signalling. It is highly expressed in ER-positive Luminal tumours and nearly
+    absent in ER-negative Basal-like tumours, making it one of the most
+    discriminative markers between the two groups.
+  - *EGFR* (epidermal growth factor receptor, also known as HER1) is amplified
+    or overexpressed in a large fraction of Basal-like tumours and is a known
+    driver of growth in this subtype. Its high expression here is consistent with
+    the Basal-like biology and is one of the reasons EGFR inhibitors have been
+    explored therapeutically in triple-negative breast cancer.
+  - *MKI67* encodes the Ki-67 protein, a widely used marker of cell
+    proliferation. It is expressed in all actively dividing cells and is absent
+    in quiescent ones. High *MKI67* confirms the high proliferation rate of
+    Basal-like tumours, which is associated with their aggressive clinical
+    behaviour.
+  *CDH1* (E-cadherin) in this cluster has a mean of 7.44, which is in the
+  mid-to-high range and does not clearly reflect the epithelial-to-mesenchymal
+  transition (EMT) sometimes associated with Basal-like tumours; at the level of
+  mean expression across the whole cluster, the EMT signal is not strong enough
+  to manifest as low CDH1.
+
+- **Clusters 2 and 4 (LumA-dominant)** show the highest *ESR1* (6.69 and 7.92),
+  *FOXA1* (8.10 and 8.63), and *CDH1* (7.16 and 8.02) — hallmarks of ER-positive,
+  differentiated Luminal tumours. *PGR* is moderate in Cluster 2 (4.88) and
+  Cluster 4 (4.63), but notably low in Cluster 1 (1.65) despite its LumA
+  dominance, suggesting that Cluster 1 may capture the LumA samples with lower
+  PR expression.
+
+- **Cluster 3 (LumB-dominant)** distinguishes itself from the other Luminal
+  clusters primarily through higher *MKI67* (5.07) and *AURKA* (5.32) — both
+  proliferation markers — consistent with the higher proliferation rate that
+  defines Luminal B relative to Luminal A. *ERBB2* is also highest here (8.00),
+  reflecting the HER2-enriched samples (96 LumB + 55 HER2) that co-occur in
+  this cluster.
+
+These patterns confirm that the unsupervised K-means clusters capture real,
+interpretable biological structure — even without using any clinical labels
+during the clustering itself.
+:::
+
+# Session Info
+
+The section below records the exact versions of R and all loaded packages used to
+generate this document. Including it at the end of every analysis script is good
+practice for reproducibility.
+
+```{r session_info}
+sessionInfo()
+```

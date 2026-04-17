@@ -16,6 +16,8 @@ website:
             href: labs/lab1b-working-with-data.qmd
           - text: "Lab 2a — Unsupervised - Dimensionality Reduction"
             href: labs/lab2a-unsupervised-dimensionality-reduction.qmd
+          - text: "Lab 2b — Unsupervised - Clustering"
+            href: labs/lab2b-unsupervised-clustering.qmd
 
 format:
   html:
