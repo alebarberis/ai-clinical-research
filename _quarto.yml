@@ -18,6 +18,8 @@ website:
             href: labs/lab2a-unsupervised-dimensionality-reduction.qmd
           - text: "Lab 2b — Unsupervised - Clustering"
             href: labs/lab2b-unsupervised-clustering.qmd
+          - text: "Lab 3a — Supervised - Classification"
+            href: labs/lab3a-supervised-classification.qmd
 
 format:
   html:

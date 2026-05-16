@@ -1,0 +1,2141 @@
+---
+title: "Supervised Learning: Classification"
+author: "Alessandro Barberis"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    number-sections: true
+    code-fold: false
+    code-tools: true
+    theme: cosmo
+    highlight-style: github
+    embed-resources: true
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Objective
+
+In this tutorial, we explore and compare several supervised learning models for
+**binary classification**. We use gene expression data from The Cancer Genome
+Atlas (TCGA) Breast Invasive Carcinoma (BRCA) project to predict **oestrogen
+receptor (ER) status** — a clinically important molecular feature that
+distinguishes two major breast cancer subtypes and directly guides treatment
+decisions.
+
+::: {.callout-note}
+## Connection to the clustering lab
+In the unsupervised learning lab, you applied hierarchical clustering and PCA to
+the same TCGA BRCA dataset. You may have noticed that two large groups of
+samples separated clearly along the first principal component — those groups
+correspond closely to ER+ and ER− tumours. In this lab, we move from
+*discovering* structure to *predicting* a known label.
+:::
+
+We will cover the following classifiers:
+
+1. Logistic Regression (GLM)
+2. K-Nearest Neighbours (KNN)
+3. Support Vector Machines (SVM)
+4. Decision Trees
+5. Random Forests
+6. Gradient Boosting Machines (GBM)
+
+For each method, we will:
+
+- introduce the theory and key hyperparameters
+- train the model on a training set
+- evaluate performance on a held-out test set (accuracy and AUC-ROC)
+- visualise and interpret the results
+
+---
+
+# Setup
+
+## Seed
+
+Before running the tutorial, we fix a seed for the random number generator
+(RNG). Different R sessions use different seeds by default (derived from the
+current time and process ID), so results would vary between runs. By setting a
+fixed seed we ensure full reproducibility.
+
+```{r initial_setup_seed}
+set.seed(
+  seed       = 5381L,              # a fixed integer value
+  kind       = "Mersenne-Twister", # default RNG algorithm in R
+  normal.kind = "Inversion"        # default method for Normal variates
+)
+```
+
+## Libraries
+
+```{r load_libraries}
+# Data access
+library(here)
+
+# Data manipulation and visualisation
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(kableExtra)
+
+# Classifiers
+library(stats)       # glm (logistic regression)
+library(glmnet)      # penalised logistic regression (LASSO, ridge, elastic net)
+library(class)       # knn
+library(e1071)       # svm
+library(rpart)       # decision tree
+library(rpart.plot)  # decision tree visualisation
+library(randomForest)
+library(gbm)
+
+# Performance evaluation
+library(pROC)
+library(PRROC)   # precision-recall curves and average precision
+```
+
+::: {.callout-tip}
+## Installing packages
+If any package is not installed, you can install it with:
+```r
+install.packages(c("here", "dplyr", "tidyr", "ggplot2", "kableExtra",
+                   "glmnet", "class", "e1071", "rpart", "rpart.plot",
+                   "randomForest", "gbm", "pROC", "PRROC"))
+```
+:::
+
+---
+
+# Data
+
+## TCGA BRCA Dataset
+
+We use gene expression data from the **Breast Invasive Carcinoma (BRCA)**
+project of [The Cancer Genome Atlas (TCGA)](https://www.cancer.gov/tcga). The
+data were downloaded with the `TCGAbiolinks` R package. Expression values are
+in **log₂(TPM + 1)** units, where TPM stands for Transcripts Per Million — a
+normalisation that accounts for differences in sequencing depth and gene length
+across samples.
+
+The dataset has been pre-processed: the 4,000 most variable genes (by standard
+deviation across samples) have been retained, and Ensembl gene IDs have been
+translated to HGNC gene symbols.
+
+```{r load_data}
+load(file = here::here("data", "tcga_brca_mini.rda"))
+```
+
+After loading, you should see two objects in your Environment:
+
+- `tcga_brca_log2_tpm` — a matrix of gene expression values (samples × genes), with expression in log₂(TPM + 1) units
+- `tcga_brca_sample_metadata` — a data frame with clinical annotations for each sample, including ER status, PAM50 subtype, and other covariates
+
+## Sample alignment
+
+Before extracting the outcome variable, we verify that the rows of the
+expression matrix and the rows of the clinical metadata refer to the **same
+samples in the same order**. This is a critical data integrity check: if the
+two objects were inadvertently re-ordered (e.g. during a join or merge step),
+predictions would be assigned to the wrong patients.
+
+```{r sample_alignment}
+# Check that sample IDs match between the expression matrix and metadata
+all_match <- all(rownames(tcga_brca_log2_tpm) == tcga_brca_sample_metadata$patient_id)
+
+if (all_match) {
+  cat("✔ Sample IDs are aligned between expression matrix and metadata.\n")
+} else {
+  stop("✘ Sample ID mismatch! Check the data before proceeding.")
+}
+```
+
+::: {.callout-warning}
+## Always verify sample alignment
+In multi-omics datasets, different data sources (expression, mutation,
+clinical) are often assembled independently and may not share the same sample
+order. Always check that IDs match before linking clinical variables to
+molecular data — a mismatch here is one of the most common and most dangerous
+sources of error in computational biology.
+:::
+
+We should start by having a look at the data.
+
+```{r data_dim}
+cat("Expression matrix — rows (samples):", nrow(tcga_brca_log2_tpm),
+    "| columns (genes):", ncol(tcga_brca_log2_tpm), "\n")
+cat("Value range:", round(range(tcga_brca_log2_tpm), 2), "\n")
+```
+
+```{r data_head}
+# Inspect the top-left corner of the matrix
+tcga_brca_log2_tpm[1:4, 1:5]
+```
+
+Each row is a patient sample and each column is a gene. Values are in
+log2(TPM + 1): a value of 0 means the gene was not detected; larger values
+indicate higher expression. The log transformation compresses the dynamic range
+and makes the data more amenable to distance-based methods.
+
+The metadata is stored in the `tcga_brca_sample_metadata` data frame.
+
+```{r metadata_head}
+head(tcga_brca_sample_metadata[, c("patient_id", "subtype",
+                                    "ER_status", "PR_status",
+                                    "stage", "age_years")])
+```
+
+The key variables we will use in this tutorial are:
+
+| Column | Description |
+|--------|-------------|
+| `patient_id` | Short TCGA patient barcode |
+| `ER_status` | Oestrogen receptor status (`ER+` / `ER-`) |
+
+## Defining the Outcome
+
+Our classification target is **ER status** (oestrogen receptor status), a
+binary variable indicating whether a tumour expresses the oestrogen receptor
+protein. ER+ tumours are typically treated with hormone therapy (e.g.
+tamoxifen), while ER− tumours are not, making this distinction clinically
+critical.
+
+```{r define_outcome}
+# Extract ER status from clinical metadata
+# Keep only samples with known ER status (drop NAs)
+er_status <- tcga_brca_sample_metadata$ER_status
+valid_idx  <- !is.na(er_status)
+
+x <- tcga_brca_log2_tpm[valid_idx, , drop = FALSE]
+y <- factor(er_status[valid_idx])  # factor with levels "ER-" / "ER+"
+
+cat("ER status levels:", levels(y), "\n")
+cat("Number of samples with known ER status:", sum(valid_idx), "\n")
+```
+
+## Data Exploration
+
+Before modelling, it is always good practice to explore the data.
+
+### Sample size and class balance
+
+```{r explore_class_balance}
+# Class distribution
+class_counts <- table(y)
+class_pct    <- round(prop.table(class_counts) * 100, 1)
+
+data.frame(
+  Status     = names(class_counts),
+  N          = as.integer(class_counts),
+  Percentage = paste0(as.numeric(class_pct), "%")
+) |>
+  kable(caption = "ER status distribution") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+::: {.callout-warning}
+## Class imbalance
+The dataset is **imbalanced**: ER+ tumours represent approximately
+`r paste0(class_pct["ER+"], "%")` of the samples. This means that a naive
+classifier that always predicts "ER+" would still achieve high accuracy,
+making accuracy alone a misleading metric. 
+
+We therefore report both **AUC-ROC** and **AUC-PR**. AUC-ROC evaluates how well
+the model ranks ER+ and ER− samples across classification thresholds, whereas
+AUC-PR focuses on the trade-off between precision and recall and is often more
+informative when one class is less frequent.
+:::
+
+### Dimensionality
+
+```{r explore_dims}
+cat("Samples:", nrow(x), "\n")
+cat("Genes (features):", ncol(x), "\n")
+```
+
+::: {.callout-important}
+## High-dimensional data
+We have `r nrow(x)` samples but `r ncol(x)` features, so the number of
+predictors is larger than the number of samples. In this **p > n** regime, many classifiers can overfit easily, especially when many genes are correlated
+or only weakly informative. This is why we evaluate performance on a held-out
+test set, and why regularisation, feature selection, careful tuning, and appropriate model choice are important in gene-expression-based classification.
+:::
+
+### Feature distributions
+
+Before applying any classifier, it is instructive to inspect whether individual
+genes already show differential expression between ER+ and ER− tumours. If the
+two classes separate well on even a handful of genes, we can expect classifiers
+to perform well. We visualise five well-characterised genes:
+
+- **ESR1** (*oestrogen receptor 1*) — encodes the ER protein directly; we
+  expect dramatically higher expression in ER+ tumours.
+- **GATA3** and **FOXA1** — transcription factors co-expressed with ESR1 in the
+  luminal lineage; expected to be higher in ER+ tumours.
+- **MKI67** — a proliferation marker; often enriched in more aggressive,
+  proliferative tumours, including many ER− and basal-like cancers.
+- **ERBB2** — encodes the HER2 receptor, overexpressed in the HER2 subtype
+  (which is largely ER−); direction of difference may be reversed or mixed.
+  
+
+```{r explore_distributions, fig.width=9, fig.height=4}
+# Genes known to correlate with ER status
+er_genes <- c("ESR1", "GATA3", "FOXA1", "MKI67", "ERBB2")
+er_genes  <- er_genes[er_genes %in% colnames(x)]   # keep only those present
+
+data.frame(
+  er_status = y,
+  x[, er_genes, drop = FALSE]
+) |>
+  pivot_longer(-er_status, names_to = "gene", values_to = "expression") |>
+  mutate(gene = factor(gene, levels = er_genes)) |>
+  ggplot(aes(x = er_status, y = expression, fill = er_status)) +
+  geom_violin(alpha = 0.6, trim = FALSE) +
+  geom_boxplot(width = 0.15, outlier.size = 0.5) +
+  facet_wrap(~gene, scales = "free_y", nrow = 1) +
+  scale_fill_manual(values = c("ER-" = "#E64B35", "ER+" = "#4DBBD5")) +
+  labs(
+    title = "Expression of ER-associated genes by ER status",
+    x = "ER status", y = "log₂(TPM + 1)", fill = "ER status"
+  ) +
+  theme_bw(base_size = 11) +
+  theme(legend.position = "bottom")
+```
+
+The plots confirm our biological expectations: *ESR1*, *GATA3*, and *FOXA1*
+are all markedly higher in ER+ tumours, providing strong individual discriminatory
+signal. *MKI67* shows the opposite trend — higher in ER− tumours, consistent
+with the more proliferative, aggressive phenotype of ER− breast cancer. *ERBB2*
+shows a more mixed picture, as expected given that HER2 amplification occurs
+across ER subtypes. The clear separation for *ESR1* in particular tells us that
+even a single-gene logistic regression model should perform reasonably well —
+and we will verify this shortly.
+
+---
+
+# Supervised Learning: Background
+
+The goal of supervised learning is to find a model $f$ such that
+$$\hat{y} = f(\mathbf{x})$$
+where $\mathbf{x}$ is the vector of predictors (gene expression values) and
+$\hat{y}$ is the predicted response (ER status).
+
+It is called *supervised* because during training the true label $y$ is known
+and guides the learning process.
+
+Depending on the nature of $y$, supervised learning problems split into:
+
+- **Regression** — $y$ is quantitative (e.g. tumour size in mm)
+- **Classification** — $y$ is qualitative (e.g. ER+/ER−, as in this lab)
+
+---
+
+# Train / Test Split
+
+To assess generalisation performance (i.e. how well a model predicts **new**
+data it has never seen), we split the data into:
+
+- **Training set** (70%) — used to fit the model
+- **Test set** (30%) — used only for final evaluation
+
+Because ER status is imbalanced, the split should be **stratified** by ER
+status, so that the proportions of ER+ and ER− tumours are similar in the
+training and test sets.
+
+::: {.callout-warning}
+## This is a simplification
+A single train/test split is the simplest evaluation strategy, but it is
+sensitive to the particular random split. In practice, **k-fold
+cross-validation** (or repeated k-fold CV) should be used to obtain more stable
+estimates. We demonstrate a brief CV example at the end. Here we keep a single
+split for clarity and speed.
+:::
+
+```{r train_test_split}
+set.seed(seed = 5381L)
+
+n_obs       <- nrow(x)
+full_index  <- seq_len(n_obs)
+train_index <- sample(full_index, size = floor(n_obs * 0.7), replace = FALSE)
+
+# Separate predictor matrix and label vector
+train_x  <- x[train_index,  , drop = FALSE]
+test_x   <- x[-train_index, , drop = FALSE]
+train_y  <- y[train_index]
+test_y   <- y[-train_index]
+
+# Combined data frames (needed by formula-based functions)
+train_df <- data.frame(train_x, er_status = train_y, stringsAsFactors = FALSE)
+test_df  <- data.frame(test_x,  er_status = test_y,  stringsAsFactors = FALSE)
+
+# Scaled versions (needed by distance-based methods such as KNN and SVM)
+train_scaled_x <- scale(train_x, center = TRUE, scale = TRUE)
+test_scaled_x  <- scale(
+  test_x,
+  center = attr(train_scaled_x, "scaled:center"),
+  scale  = attr(train_scaled_x, "scaled:scale")
+)
+
+cat("Training samples:", nrow(train_x), "\n")
+cat("Test samples:    ", nrow(test_x),  "\n")
+```
+
+::: {.callout-important}
+## Scaling the test set correctly
+When scaling the test set, **always use the mean and standard deviation
+estimated on the training set** (not on the test set itself). Scaling the test
+set with its own statistics would constitute data leakage — the test set would
+implicitly influence the preprocessing, giving an over-optimistic performance
+estimate. 
+
+In the code above, we pass `center` and `scale` attributes from the scaled training matrix `train_scaled_x` to `scale()` when processing the test matrix `test_x`.
+:::
+
+---
+
+# Performance Metrics
+
+We evaluate each classifier using three complementary metrics:
+
+| Metric | Definition | Why it matters here |
+|---|---|---|
+| **Accuracy** | Proportion of correctly classified samples | Easy to interpret, but misleading with class imbalance |
+| **AUC-ROC** | Area under the Receiver Operating Characteristic curve | Threshold-independent measure of class separation |
+| **AUC-PR** | Area under the Precision-Recall curve (Average Precision) | Most informative for imbalanced datasets |
+
+**Accuracy** is computed using a single, fixed decision threshold — typically
+0.5, meaning that a sample is classified as ER+ if the predicted probability
+exceeds 0.5. Changing the threshold changes the accuracy. This is why accuracy
+alone can be misleading: with ~80% ER+ samples in the dataset, a trivial
+classifier that always predicts ER+ would achieve ~80% accuracy with no useful
+discriminatory power.
+
+**AUC-ROC** evaluates the classifier at *all possible thresholds simultaneously*. The **Receiver Operating Characteristic (ROC) curve** plots **sensitivity** (the true positive rate) on the y-axis against **1 − specificity** (the false positive rate) on the x-axis. If ER+ is treated as the positive class, sensitivity is the proportion of true ER+ tumours correctly identified, specificity is the proportion of true ER− tumours correctly identified, and 1 − specificity is the proportion of actual ER− cases that are incorrectly called ER+.
+
+Specificity decreases from left (1.0) to right (0.0) along the x-axis, which is why ROC curves are sometimes displayed with the specificity axis reversed.
+
+Each point on the ROC curve corresponds to one threshold value. The **Area Under the Curve (AUC)** summarises the curve in a single number: AUC = 0.5 corresponds to a random classifier (the diagonal), whereas AUC = 1.0 corresponds to a perfect classifier.
+
+**AUC-PR (Average Precision)** complements AUC-ROC by focusing on the chosen positive class only. If ER+ is treated as the positive class, the **Precision-Recall (PR) curve** plots:
+
+- **Precision** = $\frac{TP}{TP + FP}$ — of all samples predicted as ER+, what
+  fraction truly are?
+- **Recall** (= Sensitivity) = $\frac{TP}{TP + FN}$ — of all true ER+ samples,
+  what fraction did we correctly identify?
+
+At each possible threshold, we get one (Precision, Recall) pair, and the PR
+curve traces these pairs. The area under this curve — the **Average Precision
+(AP)** — summarises performance in a single number between 0 and 1. 
+
+Unlike ROC-AUC, the baseline value of AUC-PR depends on the prevalence of the positive class. Therefore, AUC-PR must always be interpreted with respect to which class has been defined as “positive”.
+
+::: {.callout-note}
+## Why AUC-ROC can be overly optimistic with class imbalance
+AUC-ROC and AUC-PR summarise different aspects of classifier performance. AUC-ROC measures how well the model ranks samples from the two classes across thresholds. AUC-PR focuses on the precision-recall trade-off for the class defined as positive.
+
+The baseline for AUC-ROC is 0.5 for a non-informative classifier. In contrast, the baseline for AUC-PR is the prevalence of the positive class. If ER+ is the positive class, the no-skill AUC-PR baseline is approximately ~80%; if ER− is the positive class, the baseline is approximately ~20%.
+
+AUC-ROC accounts for true negatives (ER− samples correctly classified as ER−) in its computation. With many true negatives, a classifier can achieve a high AUC-ROC even if it performs poorly on the positive class. The PR curve ignores true negatives entirely, focusing exclusively on how well the model identifies the positive class. As a result, **AUC-PR is less easily inflated by class imbalance**. 
+
+Both metrics are informative, but in different ways.
+:::
+
+::: {.callout-note}
+## The Youden threshold
+Throughout this tutorial, we mark the **Youden threshold** on each ROC curve.
+This is the probability threshold that maximises the **Youden index**:
+$$J = \text{sensitivity} + \text{specificity} - 1$$
+It represents the operating point on the ROC curve that is furthest from the diagonal random-classifier line. This threshold gives equal weight to sensitivity and specificity, making it a useful default summary value. 
+
+It is commonly used as a principled starting point for choosing a decision threshold in clinical applications, though the final choice may be adjusted based on the relative costs of false positives and false negatives. 
+
+The threshold value, sensitivity, and specificity at the Youden point are printed directly on the plots below (in the format: threshold (sensitivity, specificity)).
+:::
+
+We will store all results in a common data frame for final comparison.
+
+```{r init_results}
+results <- data.frame(
+  Model    = character(),
+  Accuracy = numeric(),
+  AUC_ROC  = numeric(),
+  AUC_PR   = numeric(),
+  stringsAsFactors = FALSE
+)
+```
+
+A helper function to compute all metrics:
+
+```{r helper_metrics}
+evaluate_model <- function(model_name, true_labels, pred_labels, pred_probs) {
+  # Confusion matrix and accuracy
+  cm  <- table(actual = true_labels, predicted = pred_labels)
+  acc <- sum(diag(cm)) / sum(cm)
+
+  # ROC curve and AUC-ROC
+  roc_obj <- pROC::roc(
+    response  = true_labels,
+    predictor = pred_probs,
+    levels    = c("ER-", "ER+"),
+    direction = "<",
+    quiet     = TRUE
+  )
+  auc_roc <- as.numeric(pROC::auc(roc_obj))
+
+  # Precision-Recall curve and Average Precision (AUC-PR)
+  # PRROC::pr.curve expects numeric scores and binary labels (1 = positive)
+  pr_obj <- PRROC::pr.curve(
+    scores.class0 = pred_probs[true_labels == "ER+"],   # scores for positives
+    scores.class1 = pred_probs[true_labels == "ER-"],   # scores for negatives
+    curve         = TRUE
+  )
+  auc_pr <- pr_obj$auc.integral
+
+  list(cm = cm, acc = acc, auc = auc_roc, auc_pr = auc_pr,
+       roc = roc_obj, pr = pr_obj)
+}
+```
+
+---
+
+# 1. Logistic Regression
+
+## Theory and intuition
+
+Logistic regression is the canonical linear model for binary classification. It
+models the **log-odds** of belonging to the positive class as a linear function
+of the predictors:
+$$\log \frac{P(Y=1 \mid \mathbf{x})}{1 - P(Y=1 \mid \mathbf{x})} = \beta_0 + \beta_1 x_1 + \cdots + \beta_p x_p$$
+
+Applying the inverse logit (sigmoid) function to both sides gives the
+probability of belonging to class 1:
+$$P(Y=1 \mid \mathbf{x}) = \frac{1}{1 + e^{-(\beta_0 + \beta_1 x_1 + \cdots + \beta_p x_p)}}$$
+
+This probability is bounded between 0 and 1 and traces the characteristic
+S-shaped (sigmoid) curve. A sample is classified as ER+ if the predicted
+probability exceeds a chosen threshold (typically 0.5).
+
+The coefficients $\beta_j$ are estimated by maximising the log-likelihood over the training data. A positive $\beta_j$ means that, holding the other predictors fixed, higher values of predictor $x_j$ increase the probability of being in the positive class; a negative $\beta_j$ means the opposite.
+
+**Strengths:** interpretable coefficients (the log-odds scale has direct biological meaning), natural probabilistic output, fast to fit.
+**Limitations:** assumes a linear decision boundary; in this p > n setting (with 4,000 genes and ~700 training samples) the model may overfit, and coefficients can become unstable without regularisation.
+
+## Key hyperparameters
+
+::: {.callout-note}
+## Hyperparameters: standard `glm`
+The standard `stats::glm` with `family = binomial` performs **maximum
+likelihood** estimation without regularisation. When p is large relative to n,
+consider using **penalised logistic regression** (ridge, LASSO, or elastic net)
+via the `glmnet` package, which adds a regularisation term to shrink
+coefficients toward zero. LASSO (α = 1) additionally performs automatic feature
+selection by setting many coefficients exactly to zero. We demonstrate this in
+the Exercise at the end of this section.
+:::
+
+## Training
+
+### Simple logistic regression (one predictor)
+
+We start with a **simple logistic regression** using a single, biologically
+motivated predictor: *ESR1* expression (the gene encoding the oestrogen
+receptor protein itself). Based on the exploratory violin plot above, we expect
+*ESR1* expression to be a strong predictor of ER status — tumours with high
+*ESR1* expression should have a high probability of being ER+, while tumours
+with low *ESR1* expression should be predominantly ER−.
+
+We fit the model and inspect its summary:
+
+```{r glm_simple_train}
+set.seed(seed = 5381L)
+
+# Simple logistic regression: one predictor
+simple_glm <- stats::glm(
+  formula = er_status ~ ESR1,
+  data    = train_df,
+  family  = binomial
+)
+summary(simple_glm)
+```
+
+The output confirms our expectation. The coefficient for *ESR1* is positive
+(**Estimate ≈ +1.05**) and highly significant (p < 2×10⁻¹⁶), meaning that
+each unit increase in log₂(TPM+1) expression of *ESR1* multiplies the
+odds of being ER+ by approximately $e^{1.05} \approx 2.9$. 
+
+The model also fits much better than the intercept-only model: the residual deviance (268) is far lower than the null deviance (765), indicating that *ESR1* alone explains a substantial fraction of the variance in ER status. In short, *ESR1* is exactly the kind of single strong biomarker we would expect from basic biology.
+
+### Multiple logistic regression (all genes)
+
+We now fit a **multiple logistic regression** using all 4,000 genes as
+predictors. In principle, using more genes should provide more discriminatory
+power. In practice, however, with far more predictors than samples (p > n),
+maximum likelihood estimation without regularisation becomes ill-conditioned:
+coefficients can grow arbitrarily large and the model will memorise the
+training data rather than generalising.
+
+::: {.callout-warning}
+## Convergence in high dimensions
+With `r ncol(x)` predictors and `r nrow(train_x)` training samples, `glm` will
+issue convergence warnings and may produce extreme coefficient estimates — a
+clear sign of overfitting. For production use, regularisation is essential.
+Here we proceed deliberately to illustrate what happens when we ignore this
+constraint.
+:::
+
+```{r glm_multi_train}
+set.seed(seed = 5381L)
+
+full_glm <- stats::glm(
+  formula = er_status ~ .,
+  data    = train_df,
+  family  = binomial
+)
+```
+
+## Prediction and evaluation
+
+Having trained both models, we now evaluate them on the held-out test set —
+data the model has never seen during training. We use `predict()` with
+`type = "response"` to obtain predicted probabilities, then convert to class
+labels using a threshold of 0.5.
+
+### Simple logistic regression (ESR1 only)
+
+```{r glm_simple_predict}
+# Predicted probabilities from simple model
+simple_glm_probs <- stats::predict(
+  object  = simple_glm,
+  newdata = test_df,
+  type    = "response"
+)
+
+# Predicted classes at threshold 0.5
+simple_glm_classes <- factor(
+  ifelse(simple_glm_probs > 0.5, "ER+", "ER-"),
+  levels = levels(test_y)
+)
+```
+
+```{r glm_simple_evaluate}
+res_simple_glm <- evaluate_model("Simple GLM (ESR1)", test_y,
+                                 simple_glm_classes, simple_glm_probs)
+
+# Confusion matrix
+res_simple_glm$cm |>
+  as.data.frame() |>
+  kable(caption = "Confusion matrix — Simple Logistic Regression (ESR1 only)") |>
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+
+sprintf("Accuracy: %.2f%%  |  AUC-ROC: %.4f  |  AUC-PR: %.4f",
+        res_simple_glm$acc * 100, res_simple_glm$auc, res_simple_glm$auc_pr)
+```
+
+The output confirms that the simple ESR1-only model performs very well on the held-out test set. A single gene — *ESR1* — achieves **94.31% accuracy, AUC-ROC = 0.9621, and AUC-PR = 0.9893**. 
+The AUC-PR of 0.989 is far above the random baseline of ~0.79 (the prevalence of ER+ in the test set), confirming that the model's positive predictions are highly precise: when the model calls a sample ER+, it is almost always correct. 
+The AUC-ROC of 0.962 confirms excellent discrimination across all thresholds. The model misclassifies some samples in both directions — some ER+ tumours with relatively low *ESR1* expression are predicted ER−, and a small number of ER− tumours with unexpectedly high *ESR1* expression are predicted ER+. These represent biologically interesting edge cases, such as tumours with discordant IHC and transcriptomic ER status.
+
+### Multiple logistic regression (all genes)
+
+```{r glm_predict}
+# Probabilities on test set
+glm_probs <- stats::predict(
+  object  = full_glm,
+  newdata = test_df,
+  type    = "response"
+)
+
+# Predicted classes at threshold 0.5
+glm_classes <- factor(
+  ifelse(glm_probs > 0.5, "ER+", "ER-"),
+  levels = levels(test_y)
+)
+```
+
+```{r glm_evaluate}
+res_glm <- evaluate_model("Logistic Regression", test_y, glm_classes, glm_probs)
+
+# Confusion matrix
+res_glm$cm |>
+  as.data.frame() |>
+  kable(caption = "Confusion matrix — Multiple Logistic Regression (all genes)") |>
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+
+sprintf("Accuracy: %.2f%%  |  AUC-ROC: %.4f  |  AUC-PR: %.4f",
+        res_glm$acc * 100, res_glm$auc, res_glm$auc_pr)
+```
+
+::: {.callout-important}
+## Why does adding 3,999 more genes *hurt* performance?
+The multiple logistic regression achieves **50.17% accuracy, AUC-ROC = 0.4951, and AUC-PR = 0.7932** — essentially **no better than random guessing**. Note that the AUC-PR of 0.793 is approximately equal to the ER+ prevalence in the test set (~79%), which is exactly what a random classifier achieves: it assigns arbitrary probabilities, and by chance it will correctly rank ER+ above ER− about as often as the base rate predicts. 
+
+This is a striking and important result: using *more* data (more genes) produced a *worse* model than using just *one* gene. Why?
+
+This is a textbook example of **overfitting in high dimensions**. With 4,000 predictors and only ~700 training samples, `glm` cannot estimate all coefficients reliably. The fitted decision boundary becomes unstable and captures noise rather than signal. When applied to the test set, where that noise is different, the predictions are essentially random.
+
+The solution is **regularisation** — adding a penalty term that constrains the coefficients. This is what LASSO and ridge regression do, and what we explore in the exercise below.
+:::
+
+## ROC and Precision-Recall curves
+
+The ROC curve shows the trade-off between sensitivity (true positive rate for
+ER+) and specificity (1 − false positive rate) as the decision threshold varies.
+We plot both models together on each curve type for a direct comparison.
+
+```{r glm_roc, fig.width=6, fig.height=5}
+# Plot simple GLM first
+plot(
+  res_simple_glm$roc,
+  main  = "ROC Curves — Logistic Regression",
+  col   = "#4DBBD5", lwd = 2,
+  print.thres = "best", print.thres.best.method = "youden"
+)
+# Add full GLM
+plot(res_glm$roc, col = "#E64B35", lwd = 2, add = TRUE)
+legend(
+  "bottomright",
+  legend = c(
+    sprintf("Simple GLM / ESR1 only (AUC-ROC = %.3f)", res_simple_glm$auc),
+    sprintf("Full GLM / all genes (AUC-ROC = %.3f)",   res_glm$auc)
+  ),
+  col = c("#4DBBD5", "#E64B35"), lwd = 2, bty = "n", cex = 0.85
+)
+```
+
+The contrast between the two ROC curves is dramatic. The single-gene model (blue) traces a curve well above the diagonal, indicating genuine discriminatory power. The full model (red) lies close to the diagonal, consistent with no useful discriminatory signal on the test set. The Youden threshold shown for the simple model marks the operating point that maximises the Youden index, balancing sensitivity and specificity under equal weight.
+
+```{r glm_pr, fig.width=6, fig.height=5}
+plot(
+  res_simple_glm$pr,
+  col      = "#4DBBD5", lwd = 2,
+  main     = "Precision-Recall Curves — Logistic Regression",
+  auc.main = FALSE,
+  xlab     = "Recall", ylab = "Precision"
+)
+plot(res_glm$pr, col = "#E64B35", lwd = 2, add = TRUE)
+abline(h = mean(test_y == "ER+"), lty = 2, col = "grey50")
+legend(
+  "bottomleft",
+  legend = c(
+    sprintf("Simple GLM / ESR1 only (AUC-PR = %.3f)", res_simple_glm$auc_pr),
+    sprintf("Full GLM / all genes (AUC-PR = %.3f)",   res_glm$auc_pr)
+  ),
+  col = c("#4DBBD5", "#E64B35"), lwd = 2, bty = "n", cex = 0.85
+)
+```
+
+The PR curves reinforce the ROC findings. The single-gene model (blue) maintains very high precision (~0.99) across most of the recall range, confirming that positive predictions are almost always correct. The unregularised full model (red) hovers near the random baseline (dashed line, AUC-PR ≈ 0.793 ≈ prevalence of ER+ in the test set), confirming its predictions are no better than chance.
+
+## Visualisation: ESR1 sigmoid curve
+
+The sigmoid curve is the hallmark of logistic regression. It maps a continuous
+predictor (here *ESR1* expression) to a probability between 0 and 1. We plot
+the estimated curve on the training data.
+
+We expect to see: (a) ER− samples (red) concentrated at low *ESR1* expression,
+(b) ER+ samples (blue) concentrated at high *ESR1* expression, and (c) an
+S-shaped curve rising steeply in the range where the two groups overlap.
+
+```{r glm_sigmoid, fig.width=7, fig.height=4}
+train_df_plot <- train_df |>
+  mutate(
+    prob       = predict(simple_glm, newdata = train_df, type = "response"),
+    er_numeric = ifelse(er_status == "ER+", 1, 0)
+  )
+
+ggplot(train_df_plot, aes(x = ESR1, y = er_numeric)) +
+  geom_point(aes(colour = er_status), alpha = 0.3, size = 1) +
+  geom_smooth(
+    method = "glm",
+    method.args = list(family = "binomial"),
+    se = TRUE, colour = "#E64B35", fill = "#E64B3533"
+  ) +
+  scale_colour_manual(values = c("ER-" = "#E64B35", "ER+" = "#4DBBD5")) +
+  labs(
+    title  = "Logistic regression: ESR1 → P(ER+)",
+    x      = "ESR1 expression [log2(TPM+1)]",
+    y      = "P(ER+)",
+    colour = "ER status"
+  ) +
+  theme_bw(base_size = 11)
+```
+
+The plot matches our expectation closely. At low *ESR1* expression (left),
+nearly all samples are ER− (red), and the model correctly assigns near-zero
+probability of being ER+. At high expression (right), virtually all samples are
+ER+ (blue), and the model assigns near-1 probability. The transition zone
+(mid-range *ESR1* expression, approximately 2.5–5 on the log2 scale) is where
+uncertainty is highest and where misclassifications occur. The shaded band
+shows the 95% confidence interval of the fit — note how uncertainty is largest
+in this transition region, as expected.
+
+## Store results
+
+```{r glm_store}
+results <- rbind(results, data.frame(
+  Model    = "Logistic Regression",
+  Accuracy = res_glm$acc,
+  AUC_ROC  = res_glm$auc,
+  AUC_PR   = res_glm$auc_pr
+))
+```
+
+## Exercise
+
+::: {.callout-caution icon="false"}
+## ✏️ Exercise 1 — Penalised logistic regression (LASSO)
+Standard logistic regression fails when p >> n because it cannot constrain
+the coefficient estimates. The LASSO (Least Absolute Shrinkage and Selection
+Operator) adds an L1 penalty to the log-likelihood that shrinks many
+coefficients to exactly zero, performing simultaneous estimation and feature
+selection.
+
+Fit a **LASSO logistic regression** using `glmnet::cv.glmnet` with
+`family = "binomial"` and `alpha = 1`. Use 5-fold cross-validation to select
+the optimal regularisation strength `lambda`. Compare its accuracy and AUC
+to the unregularised model above.
+
+**Hint:**
+```r
+cv_fit <- glmnet::cv.glmnet(
+  x      = train_x,
+  y      = train_y,
+  family = "binomial",
+  alpha  = 1,      # 1 = LASSO; 0 = ridge; in between = elastic net
+  nfolds = 5
+)
+# Two useful lambda choices:
+# cv_fit$lambda.min  — lambda with minimum CV error
+# cv_fit$lambda.1se  — largest lambda within 1 SE of minimum (more regularised)
+lasso_probs <- predict(cv_fit, newx = test_x,
+                       s = cv_fit$lambda.min, type = "response")
+```
+:::
+
+::: {.callout-tip collapse="true" icon="false"}
+
+## 💡 Solution
+
+```{r ex1_solution}
+set.seed(5381L)
+cv_lasso <- glmnet::cv.glmnet(
+  x      = train_x,
+  y      = train_y,
+  family = "binomial",
+  alpha  = 1,
+  nfolds = 5
+)
+lasso_probs   <- as.numeric(predict(cv_lasso, newx = test_x,
+                                    s = cv_lasso$lambda.min, type = "response"))
+lasso_classes <- factor(ifelse(lasso_probs > 0.5, "ER+", "ER-"),
+                        levels = levels(test_y))
+res_lasso <- evaluate_model("LASSO Logistic Regression",
+                            test_y, lasso_classes, lasso_probs)
+sprintf("LASSO — Accuracy: %.2f%%  |  AUC-ROC: %.4f  |  AUC-PR: %.4f",
+        res_lasso$acc * 100, res_lasso$auc, res_lasso$auc_pr)
+
+# How many genes did LASSO select?
+coefs         <- coef(cv_lasso, s = cv_lasso$lambda.min)
+# Remove the intercept (first entry)
+nonzero_genes <- rownames(coefs)[which(coefs != 0)][-1]
+cat("Non-zero genes selected by LASSO:", length(nonzero_genes), "\n")
+cat(nonzero_genes, "\n")
+```
+
+LASSO achieves **94.31% accuracy, AUC-ROC = 0.9603, and AUC-PR = 0.9879** — a dramatic improvement over the unregularised full model (50.17% accuracy, AUC-ROC = 0.495, AUC-PR = 0.793) using the same 4,000-gene input. The regularisation constraint prevents the model from memorising training noise: by forcing most coefficients to zero, LASSO effectively selects a small subset of the most informative genes and estimates their effects reliably.
+
+In this dataset, LASSO selects 18 genes: *TFF1*, *AGR3*, *ESR1*, *CA12*, *DACH1*, *HPX*, *CPA3*, *SOX11*, *CDCA7*, *CCNE1*, *CCDC78*, *MISP3*, *CHODL*, *SEL1L3*, *ZNF516*, *LRRC73*, *CISD3*, and *CCDC24*. *ESR1* is included, as expected — it is the dominant signal for ER status. Several other selected genes (*AGR3*, *CA12*, *TFF1*) are established luminal breast cancer markers. The remaining genes (*CDCA7*, *CCNE1*, *SOX11* and others) may represent cell-cycle or differentiation-related signals that distinguish ER+ from ER− biology. Because many genes are correlated, the exact LASSO-selected subset should be interpreted as a sparse predictive signature rather than a unique biological truth.
+
+The LASSO performance (AUC-ROC = 0.960, AUC-PR = 0.988) is virtually identical to the simple ESR1 model (AUC-ROC = 0.962, AUC-PR = 0.989). This is not entirely surprising: *ESR1* is such a dominant signal for ER status that adding further genes provides minimal marginal gain in this dataset. The key takeaway is that **regularisation rescues high-dimensional logistic regression from complete failure** — the gap between AUC-ROC 0.495 (unregularised) and 0.960 (LASSO) is what matters most.
+:::
+
+---
+
+# 2. K-Nearest Neighbours (KNN)
+
+## Theory and intuition
+
+KNN is one of the simplest non-parametric classifiers. To predict the class of
+a new point $\mathbf{x}^*$, it:
+
+1. Finds the $k$ training samples closest to $\mathbf{x}^*$ (by Euclidean
+   distance in feature space)
+2. Returns the **majority class** among those $k$ neighbours
+
+KNN makes no assumptions about the shape of the decision boundary, which makes
+it flexible. However, it stores the entire training set and is sensitive to
+the scale of features.
+
+**Strengths:** non-parametric, no training phase, simple to understand.  
+**Limitations:** slow at prediction time (O(n) per query), sensitive to
+feature scaling, and sensitive to irrelevant/noisy features (the "curse of
+dimensionality").
+
+## Key hyperparameters
+
+::: {.callout-note}
+## Hyperparameter: `k` (number of neighbours)
+- **Small k** (e.g. k = 1): very flexible, low bias, high variance → tends to overfit
+- **Large k** (e.g. k = n): very smooth boundary, high bias, low variance → tends to underfit
+- In practice, k is chosen by cross-validation. Odd values of k are preferred
+  in binary classification to avoid ties (when exactly k/2 neighbours belong to
+  each class, the outcome is ambiguous). In this lab we use k = 10 as a
+  round number for illustration; `class::knn` breaks ties randomly when they
+  occur. We explore the sensitivity to k in the exercise below.
+:::
+
+## Training and prediction
+
+KNN does not have a separate training phase — all the computation happens at
+prediction time. We use the `class::knn` function and provide **standardised**
+data (z-scored gene expression). Standardisation is critical for distance-based
+methods: without it, genes with large expression ranges would dominate the
+distance calculation regardless of their actual discriminatory power.
+
+We use k = 10 as a starting point. With ~700 training samples and a binary
+outcome, k = 10 is a reasonable default — small enough to capture local
+structure, large enough to smooth out individual noise. We explore the effect
+of other values of k in the exercise below.
+
+We expect KNN to perform well here, because the ER+/ER− groups are
+well-separated in the full gene expression space (as seen in the PCA from the
+clustering lab). The main question is whether the high dimensionality (4,000
+genes) causes the curse of dimensionality to degrade performance — we will see how well this works in practice.
+
+```{r knn_train_predict}
+set.seed(seed = 5381L)
+
+knn_pred <- class::knn(
+  train = train_scaled_x,   # standardised training features
+  test  = test_scaled_x,    # standardised test features
+  cl    = train_y,          # training labels
+  k     = 10,               # number of neighbours
+  prob  = TRUE              # return vote proportions
+)
+
+# The `prob` attribute stores the proportion of votes for the *winning* class.
+# We need to convert this to P(ER+) for ROC analysis.
+knn_vote_prop <- attributes(knn_pred)$prob
+knn_probs     <- ifelse(knn_pred == "ER+", knn_vote_prop, 1 - knn_vote_prop)
+```
+
+## Evaluation
+
+We evaluate the KNN classifier on the held-out test set. We compute the
+confusion matrix — which shows the number of correct and incorrect predictions
+for each class — as well as accuracy and AUC-ROC.
+
+```{r knn_evaluate}
+res_knn <- evaluate_model("KNN (k=10)", test_y, knn_pred, knn_probs)
+
+res_knn$cm |>
+  as.data.frame() |>
+  kable(caption = "Confusion matrix — KNN (k=10)") |>
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+
+sprintf("Accuracy: %.2f%%  |  AUC-ROC: %.4f  |  AUC-PR: %.4f",
+        res_knn$acc * 100, res_knn$auc, res_knn$auc_pr)
+```
+
+KNN achieves **93.98% accuracy, AUC-ROC = 0.9356, and AUC-PR = 0.9713**.
+Compared to the **unregularised multiple logistic regression** (AUC-ROC = 0.495,
+AUC-PR = 0.793), this is a dramatic improvement. Compared to the **simple ESR1
+logistic regression** (AUC-ROC = 0.962, AUC-PR = 0.989), KNN is slightly lower
+on both metrics — suggesting that a single well-chosen linear predictor can
+outperform a non-parametric distance-based method when one gene strongly
+dominates the signal.
+
+The AUC-PR of 0.971 is well above the random baseline of ~0.79, confirming that KNN's positive-class predictions are highly precise. The confusion matrix reveals that KNN errs slightly more on the ER− class (the minority group): with more ER+ training examples in the neighbourhood of any given test point, the majority-vote mechanism is biased toward the more frequent class.
+
+## ROC and Precision-Recall curves
+
+The ROC curve shows how the classifier's sensitivity and specificity trade off as we vary the probability threshold. For KNN, the "probability" is the proportion of votes for the winning class among the k neighbours, so the curve has fewer distinct points than for continuous probability models.
+
+```{r knn_roc, fig.width=6, fig.height=5}
+plot(
+  res_knn$roc,
+  main  = "ROC Curve — KNN (k=10)",
+  col   = "#4DBBD5", lwd = 2,
+  print.thres = "best", print.thres.best.method = "youden"
+)
+```
+
+The Youden threshold indicates the optimal operating point. The AUC-ROC of 0.936 confirms that KNN can distinguish ER+/ER− tumours with high reliability, despite operating in 4,000 dimensions and using only local neighbourhood information with no explicit feature selection.
+
+```{r knn_pr, fig.width=6, fig.height=5}
+plot(
+  res_knn$pr,
+  col      = "#4DBBD5", lwd = 2,
+  main     = "Precision-Recall Curve — KNN (k=10)",
+  auc.main = FALSE,
+  xlab     = "Recall", ylab = "Precision"
+)
+abline(h = mean(test_y == "ER+"), lty = 2, col = "grey50")
+legend("bottomleft",
+       legend = sprintf("KNN k=10 (AUC-PR = %.3f)", res_knn$auc_pr),
+       col = "#4DBBD5", lwd = 2, bty = "n")
+```
+
+The PR curve maintains high precision across most of the recall range, confirming that KNN rarely produces false positive ER+ calls. The small drop in precision at very high recall (near 1.0) reflects the few remaining hard-to-classify samples that require a very low threshold to capture — the same samples that tend to have expression patterns more similar to ER+ tumours than most ER− tumours.
+
+## Store results
+
+```{r knn_store}
+results <- rbind(results, data.frame(
+  Model    = "KNN (k=10)",
+  Accuracy = res_knn$acc,
+  AUC_ROC  = res_knn$auc,
+  AUC_PR   = res_knn$auc_pr
+))
+```
+
+## Exercise
+
+::: {.callout-caution icon="false"}
+## ✏️ Exercise 2 — Choosing k
+Fit KNN for k ∈ {1, 5, 10, 20, 50} and plot accuracy and AUC against k. What is the optimal k? Do the metrics agree?
+
+**Hint:** loop over a vector of k values, calling `class::knn` each time and
+computing `evaluate_model`.
+:::
+
+::: {.callout-tip collapse="true" icon="false"}
+## 💡 Solution
+
+```{r ex2_solution}
+k_values <- c(1, 5, 10, 20, 50)
+knn_results <- lapply(k_values, function(k) {
+  set.seed(5381L)
+  pred <- class::knn(train_scaled_x, test_scaled_x, train_y, k = k, prob = TRUE)
+  vp   <- attributes(pred)$prob
+  pr   <- ifelse(pred == "ER+", vp, 1 - vp)
+  res  <- evaluate_model(paste0("KNN k=", k), test_y, pred, pr)
+  data.frame(k = k, Accuracy = res$acc, AUC_ROC = res$auc, AUC_PR = res$auc_pr)
+})
+knn_k_df <- do.call(rbind, knn_results)
+
+# Plot
+knn_k_df |>
+  pivot_longer(-k, names_to = "metric", values_to = "value") |>
+  ggplot(aes(x = k, y = value, colour = metric)) +
+  geom_line() + geom_point() +
+  labs(title = "KNN performance vs k", y = "Value", colour = "Metric") +
+  theme_bw()
+```
+
+The results illustrate a clear bias-variance trade-off, and AUC-PR adds an important third perspective:
+
+```{r}
+# Table
+knn_k_df |>
+  as.data.frame() |>
+  kable(caption = "KNN performance vs k",
+        col.names = c("k", "Accuracy", "AUC-ROC", "AUC-PR"),
+        digits = 4) |>
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+```
+
+At **k = 1**, all three metrics are worst: the boundary is extremely sensitive to noise, causing erratic predictions. Performance improves consistently as k increases to 5–10. Beyond **k = 20**, accuracy begins to decline as the majority vote is pulled toward the dominant ER+ class — but AUC-ROC and AUC-PR *continue to improve*. 
+
+This divergence is important: **accuracy depends on a fixed classification threshold**, whereas AUC-ROC and AUC-PR evaluate the quality of the score ranking across all thresholds. As k increases, the vote fractions become smoother score estimates, which can improve ranking performance even if the 0.5-threshold classification becomes slightly less favorable.
+
+At **k = 50**, the AUC-PR of 0.980 is the highest of all — meaning that the model's confidence in positive predictions is most reliable here, even though accuracy has dropped to 91.30%. The optimal k therefore depends on what matters clinically: if threshold-specific classification accuracy is primary, k = 5–10 is best; if ranking or probability calibration for further analysis is primary, larger k may be preferable.
+:::
+
+---
+
+# 3. Support Vector Machines (SVM)
+
+## Theory and intuition
+
+SVMs find the **optimal separating hyperplane** — the one that maximises the **margin** between the closest training points of opposite classes (the *support vectors*). When data are not linearly separable, SVMs use the **kernel trick** to implicitly map data into a higher-dimensional space where a linear separator may exist.
+
+Common kernels:
+
+| Kernel | Description | When to use |
+|---|---|---|
+| Linear | Dot product | Linearly separable or p >> n |
+| Radial (RBF) | Gaussian function of distance | General non-linear boundaries |
+| Polynomial | Polynomial of dot product | Specific polynomial structure |
+
+**Strengths:** effective in high-dimensional spaces, flexible via kernels, and able to trade margin width against misclassification through the soft-margin formulation.  
+**Limitations:** SVMs do not natively produce probability estimates — the decision function outputs a signed distance from the hyperplane, not a probability. The sign of the SVM decision value determines the predicted class under the zero threshold, and the absolute value indicates how far the sample lies from the decision boundary. To obtain probabilities for use in ROC analysis, a post-hoc **calibration** step is needed. *Calibration* is the process of mapping the raw SVM decision values to well-behaved probabilities in [0, 1]. The most common approach is **Platt scaling**, which fits a logistic regression on the SVM outputs on a held-out subset of the training data; another option is isotonic regression. Without calibration, the SVM can still be used for hard classification (above/below a threshold), but the resulting "probabilities" are not directly interpretable. SVMs are also slow to train on large datasets and sensitive to feature scaling.
+
+## Key hyperparameters
+
+::: {.callout-note}
+## Hyperparameters: `cost` and `gamma`
+- **`cost` (C):** the penalty for misclassifying training points. High C → narrow margin, tries to classify all training points correctly (risk of overfitting).
+  Low C → wide margin, allows some misclassifications (more regularised).
+- **`gamma` (RBF kernel only):** controls the reach of each training point.
+  High γ → each point influences only nearby points (complex boundary). Low γ → smoother boundary.
+
+Both should be tuned jointly, typically via cross-validation on a grid of
+(C, γ) values using `tune.svm`.
+:::
+
+## Training
+
+We fit an SVM with an RBF kernel using the `e1071::svm` function. We specify `kernel = "radial"` for the RBF kernel and set `scale = TRUE` so that the function internally standardises all features before fitting — analogous to what we did manually for KNN. We also set `probability = TRUE`, which instructs the function to apply Platt scaling after training (as described in the limitations above), enabling the model to output calibrated class probabilities rather than just hard class decisions. Finally, `cost = 10` sets the penalty parameter C, which moderately penalises misclassifications.
+
+```{r svm_train}
+set.seed(seed = 5381L)
+
+svm_fit <- e1071::svm(
+  formula     = er_status ~ .,
+  data        = train_df,
+  kernel      = "radial",   # RBF kernel
+  cost        = 10,
+  scale       = TRUE,       # standardise features internally
+  probability = TRUE        # enable probability estimates
+)
+print(svm_fit)
+```
+
+The summary reports the number of **support vectors** — the training points that lie on or inside the margin. A large number of support vectors relative to the training set size can indicate that the decision boundary is complex or that the data are noisy. In high-dimensional settings like ours, the number of support vectors is often substantial.
+
+## Evaluation
+
+To predict on the test set, we pass `probability = TRUE` to `predict()`, which returns both the predicted class and the calibrated probability for each class.
+We extract the probability column for ER+ to compute the ROC curve.
+
+```{r svm_predict}
+svm_pred_full <- predict(svm_fit, newdata = test_df, probability = TRUE)
+svm_probs     <- attr(svm_pred_full, "probabilities")[, "ER+"]
+svm_classes   <- svm_pred_full
+```
+
+```{r svm_evaluate}
+res_svm <- evaluate_model("SVM (RBF)", test_y, svm_classes, svm_probs)
+
+res_svm$cm |>
+  as.data.frame() |>
+  kable(caption = "Confusion matrix — SVM (RBF kernel)") |>
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+
+sprintf("Accuracy: %.2f%%  |  AUC-ROC: %.4f  |  AUC-PR: %.4f",
+        res_svm$acc * 100, res_svm$auc, res_svm$auc_pr)
+```
+
+The RBF SVM achieves **93.98% accuracy, AUC-ROC = 0.9471, and AUC-PR = 0.980**.
+Looking at the confusion matrix, misclassifications are split roughly evenly: 9 ER− samples are incorrectly predicted as ER+, and 9 ER+ samples are incorrectly predicted as ER−. The AUC-PR of 0.980 is notably higher than KNN's 0.971, suggesting that the SVM's calibrated probability scores (via Platt scaling) are more precise for the positive class than the raw vote proportions from KNN, even at identical accuracy and similar overall confusion patterns.
+
+## ROC and Precision-Recall curves
+
+The ROC curve summarises the SVM's discriminatory performance across all possible probability thresholds. Recall that the SVM probabilities are obtained via Platt scaling — a logistic calibration fitted on top of the raw SVM decision values — which is useful for interpretability, while the ROC curve itself primarily reflects ranking/discrimination. 
+
+```{r svm_roc, fig.width=6, fig.height=5}
+plot(
+  res_svm$roc,
+  main  = "ROC Curve — SVM (RBF)",
+  col   = "#00A087", lwd = 2,
+  print.thres = "best", print.thres.best.method = "youden"
+)
+```
+
+The curve rises steeply from the bottom-left corner, which indicates that the model achieves high sensitivity while maintaining high specificity across a broad range of thresholds. In other words, only a small change in threshold is needed to move from a very strict classifier to one that captures most ER+ tumours. The AUC of about 0.947 places the model in a very strong discrimination range. 
+
+The Youden threshold (marked on the plot) indicates the operating point that maximises the sum of sensitivity and specificity, and is often used as a simple default threshold for binary classification; moving the threshold lower would increase sensitivity at the cost of more false positives, while moving it higher would increase specificity at the cost of missing more ER+ tumours.
+
+```{r svm_pr, fig.width=6, fig.height=5}
+plot(
+  res_svm$pr,
+  col      = "#00A087", lwd = 2,
+  main     = "Precision-Recall Curve — SVM (RBF)",
+  auc.main = FALSE,
+  xlab     = "Recall", ylab = "Precision"
+)
+abline(h = mean(test_y == "ER+"), lty = 2, col = "grey50")
+legend("bottomleft",
+       legend = sprintf("SVM RBF (AUC-PR = %.3f)", res_svm$auc_pr),
+       col = "#00A087", lwd = 2, bty = "n")
+```
+
+The SVM PR curve maintains near-perfect precision (~0.98) across most recall levels, consistent with the high AUC-PR of 0.980. The underlying score separation remains strong even when the threshold is lowered to recover more ER+ tumours, which is a useful practical property in clinical settings where confident positive calls matter.
+
+## Store results
+
+```{r svm_store}
+results <- rbind(results, data.frame(
+  Model    = "SVM (RBF)",
+  Accuracy = res_svm$acc,
+  AUC_ROC  = res_svm$auc,
+  AUC_PR   = res_svm$auc_pr
+))
+```
+
+## Exercise
+
+::: {.callout-caution icon="false"}
+## ✏️ Exercise 3 — Linear vs RBF kernel
+Compare SVM with a linear kernel to the RBF kernel you just fitted. In high-dimensional settings (many genes, relatively few samples), a linear SVM often performs as well as — or better than — a non-linear one. Can you explain why?
+:::
+
+::: {.callout-tip collapse="true" icon="false"}
+## 💡 Solution
+
+```{r ex3_solution}
+set.seed(5381L)
+svm_linear <- e1071::svm(
+  formula = er_status ~ ., data = train_df,
+  kernel = "linear", cost = 1,
+  scale = TRUE, probability = TRUE
+)
+svm_linear_pred  <- predict(svm_linear, newdata = test_df, probability = TRUE)
+svm_linear_probs <- attr(svm_linear_pred, "probabilities")[, "ER+"]
+res_svm_linear   <- evaluate_model("SVM (linear)", test_y,
+                                   svm_linear_pred, svm_linear_probs)
+sprintf("Linear SVM — Accuracy: %.2f%%  |  AUC-ROC: %.4f  |  AUC-PR: %.4f",
+        res_svm_linear$acc * 100, res_svm_linear$auc, res_svm_linear$auc_pr)
+```
+
+In this dataset and with these hyperparameters, the linear SVM achieves **Accuracy: 95.32%, AUC-ROC: 0.9508, AUC-PR: 0.9844** — slightly outperforming the RBF SVM on all three metrics (Accuracy: 93.98%, AUC-ROC: 0.947, AUC-PR: 0.980). This is a common outcome in high-dimensional genomic classification: the relevant signal is often well captured by a linear decision boundary, so the extra flexibility of an RBF kernel does not provide additional benefit and can even introduce a small amount of overfitting.
+
+A linear SVM is also computationally simpler and usually faster to train than an RBF SVM, especially when the number of features is large. In settings like this one, where many genes contribute weakly and additively to the class label, a linear model can be an excellent choice.
+
+This result reinforces the broader lesson from the logistic regression section: in high-dimensional settings, **simpler, well-regularised linear models often rival or outperform more complex non-linear ones**. That said, the comparison here reflects the specific data and hyperparameter choices used in this lab; a fully tuned RBF model could perform differently.
+
+:::
+
+---
+
+# 4. Decision Tree
+
+## Theory and intuition
+
+Decision trees recursively **partition the feature space** into rectangular regions. At each internal node, the algorithm selects the feature and threshold that best separate the classes (maximising a purity criterion such as the Gini impurity or information gain). The resulting model is a binary tree of if-then-else rules.
+
+**Strengths:** highly interpretable, handles mixed feature types, no scaling required, captures non-linear interactions.  
+**Limitations:** high variance — small changes in training data can yield very different trees. Prone to overfitting without pruning.
+
+## Key hyperparameters
+
+::: {.callout-note}
+## Hyperparameters: `cp`, `maxdepth`, `minsplit`
+`rpart` uses **cost-complexity pruning**, controlled by:
+
+- **`cp` (complexity parameter):** a  split is only attempted if it decreases the overall lack of fit by at least this amount. Smaller `cp` → deeper, more complex tree; larger `cp` → simpler tree. Use `rpart::printcp` and `rpart::plotcp` to select the optimal `cp` via cross-validation error.
+- **`maxdepth`:** maximum depth of the tree.
+- **`minsplit`:** minimum number of observations in a node for a split to be attempted.
+:::
+
+## Training
+
+We fit a decision tree using the `rpart::rpart` function. We specify `method = "class"` to indicate a classification problem (as opposed to `"anova"` for regression). The `control` argument accepts an `rpart.control` object that fine-tunes the tree-growing algorithm:
+
+- **`cp = 0.001`** (complexity parameter): a split is only made if it reduces the overall lack-of-fit by at least this fraction. Setting a very small value (0.001) allows the tree to grow deep initially; we will prune it back later.
+- **`minsplit`** (default 20): the minimum number of samples in a node required before attempting a split.
+- **`maxdepth`** (default 30): the maximum depth of the tree.
+
+We intentionally let the tree grow large first, then prune it back to the optimal size — this is generally preferable to constraining depth upfront, because it gives us a data-driven way to choose the right complexity.
+
+```{r tree_train}
+set.seed(seed = 5381L)
+
+tree_fit <- rpart::rpart(
+  formula = er_status ~ .,
+  data    = train_df,
+  method  = "class",
+  control = rpart::rpart.control(cp = 0.001)  # allow growth, prune after
+)
+```
+
+We then use `rpart::plotcp` to visualise how the **cross-validation error** (the `xerror` column in the internal `cptable`) changes as a function of the complexity parameter `cp`. Each point on the plot corresponds to a subtree of a different size: moving left (larger `cp`) gives a simpler tree with fewer splits; moving right (smaller `cp`) gives larger,  more complex trees.
+
+A common strategy is the **1-SE rule**: choose the simplest tree whose cross-validation error is within one standard error of the minimum — this corresponds to the leftmost point below the dashed horizontal line on the plot.
+In the code below, for simplicity we instead select the `cp` value that directly minimises the cross-validation error (`which.min(xerror)`), which may yield a slightly larger tree but is easy to understand and still guards against overfitting.
+
+```{r tree_prune, fig.width=7, fig.height=4}
+rpart::plotcp(tree_fit)
+best_cp  <- tree_fit$cptable[which.min(tree_fit$cptable[, "xerror"]), "CP"]
+tree_pruned <- rpart::prune(tree_fit, cp = best_cp)
+```
+
+The dashed horizontal line marks the 1-SE threshold above the minimum cross-validation error. Notice how the cross-validation error first decreases as the tree grows larger (capturing genuine signal) and then plateaus or increases slightly (beginning to fit noise): this U-shaped pattern is the
+empirical signature of the **bias-variance trade-off**. The selected `cp` (minimum CV error) corresponds to the tree size at the bottom of this curve.
+
+In this plot, the minimum appears at `cp ≈ 0.14`, corresponding to a tree with 2 terminal nodes. That means the pruned tree is very small: the data support only one split under cross-validation, which is a useful reminder that classification trees can be highly interpretable but often need to remain shallow to generalise well.
+
+## Visualisation
+
+One of the key strengths of a decision tree is that it can be visualised directly as a diagram of if-then-else rules. We use `rpart.plot::rpart.plot` to render the pruned tree. Each node is colour-coded by predicted class (red for ER−, blue for ER+), and displays three pieces of information:
+
+- **Predicted class** — the majority class among training samples in that node
+- **Class probability** — the proportion of ER− samples (left) and ER+ samples (right) reaching that node
+- **Percentage of data** — the fraction of all training samples reaching that node
+
+```{r tree_plot, fig.width=10, fig.height=6}
+rpart.plot::rpart.plot(
+  tree_pruned,
+  type  = 4,
+  extra = 104,
+  box.palette = list("ER-" = "#E64B35", "ER+" = "#4DBBD5"),
+  main  = "Decision Tree — ER status (pruned)"
+)
+```
+
+In the tree shown here, the pruned model is a **single split** on *ESR1* at 3.9, so this is effectively a **decision stump**. Samples with *ESR1* expression below 3.9 are sent to the left terminal node, and samples with *ESR1* expression at or above 3.9 are sent to the right terminal node.
+
+The left leaf reads **ER− | 0.87  0.13 | 26%**, which means:
+
+- The predicted class is **ER−**
+- 87% of samples in this node are ER− (the model is confident)
+- 13% are actually ER+ (the model's error rate for this leaf)
+- **26%** of all training samples end up in this leaf
+
+The right leaf reads **ER+ | .02 .98 | 74%**, which means:
+
+- The predicted class is **ER+**
+- 98% of the samples in this node are ER+
+- 2% are ER−
+- **74%** of the training samples end up in this leaf
+
+The root node reads **ER+ | .24 .76 | 100%**, which reflects the class composition of the full training set before splitting. 
+
+This is a particularly nice example because a single biologically meaningful threshold on *ESR1* already captures most of the ER-status structure in the data. For classification trees, `rpart.plot` can display the per-class probabilities at each node, and `predict.rpart(..., type = "prob")` returns class probabilities for new samples.
+
+::: {.callout-note}
+## How many splits does the pruned tree have?
+The tree structure you see depends on the data and the pruning criterion. In this fit, the pruned tree has only **one split** on *ESR1*. That is not a failure of the method: it shows that a simple, biologically motivated rule captures most of the structure. It means that, under cross-validation, the data only support one genuinely useful partition of the feature space. This is exactly what we would expect if *ESR1* is the dominant discriminator, as suggested by the logistic regression section.
+:::
+
+## Evaluation
+
+We now apply the pruned tree to the held-out test set and compute the confusion matrix, accuracy, and AUC. We use `predict()` with `type = "class"` for the class labels and `type = "prob"` for the class probabilities used in the ROC computation.
+
+```{r tree_predict}
+tree_classes <- predict(tree_pruned, newdata = test_df, type = "class")
+tree_probs   <- predict(tree_pruned, newdata = test_df, type = "prob")[, "ER+"]
+```
+
+```{r tree_evaluate}
+res_tree <- evaluate_model("Decision Tree", test_y, tree_classes, tree_probs)
+
+res_tree$cm |>
+  as.data.frame() |>
+  kable(caption = "Confusion matrix — Decision Tree") |>
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+
+sprintf("Accuracy: %.2f%%  |  AUC-ROC: %.4f  |  AUC-PR: %.4f",
+        res_tree$acc * 100, res_tree$auc, res_tree$auc_pr)
+```
+
+The pruned decision tree achieves **93.98% accuracy, AUC-ROC = 0.9263, and AUC-PR = 0.9690**. These are the lowest AUC values among all methods except the unregularised logistic regression, yet still well above random. The AUC-PR of 0.969 is above the the approximate ER+ prevalence in the test set, confirming that the tree's positive predictions are still meaningfully precise.
+
+The main trade-off is that the tree gives up some predictive performance in exchange for complete **interpretability**: every prediction is a human-readable threshold rule on *ESR1*. The downside is that tree probabilities are coarse, because they are tied to terminal-node class proportions rather than to a smooth score function.
+
+## ROC and Precision-Recall curves
+
+The ROC curve summarises the decision tree's discriminatory performance across all possible probability thresholds. For a decision tree, the predicted probability is the class proportion within a terminal node, so all samples that fall in the same leaf receive exactly the same score. In this pruned tree, there is only one split on *ESR1*, so there are only two distinct probability values for ER+; this is why the ROC curve has a very coarse, staircase-like shape.
+
+The Youden threshold shown on the plot is the probability cutoff that maximises the sum of sensitivity and specificity, and it provides a simple default operating point for classification.
+
+```{r tree_roc, fig.width=6, fig.height=5}
+plot(
+  res_tree$roc,
+  main  = "ROC Curve — Decision Tree",
+  col   = "#3C5488", lwd = 2,
+  print.thres = "best", print.thres.best.method = "youden"
+)
+```
+
+::: {.callout-note}
+## Why does the decision tree ROC/PR curve have a staircase shape?
+For models that output a *continuous* probability (e.g. logistic regression, SVM after Platt scaling), each sample has a unique probability value, so the curves can step at many distinct thresholds — producing a smooth line. For a decision tree, however, all samples reaching the *same leaf* receive *exactly the same* probability, because the probability is simply the class proportion in that terminal node. With only a few leaves, there are only a few distinct probability values, and therefore only a few threshold levels at which the curves can step — giving them a characteristic **staircase appearance**. Each abrupt step corresponds to one leaf's probability crossing the threshold. 
+
+This is not a defect: it is the natural consequence of a piecewise-constant score function. Ensemble methods such as Random Forests or GBMs typically produce more finely graded score distributions because they average predictions over many trees, which usually makes the curves look smoother.
+:::
+
+The Youden-optimal threshold is 0.556, corresponding to a sensitivity of 0.903 and specificity of 0.949. Despite the staircase shape — which limits the smoothness of the curve — the AUC-ROC of 0.926 shows that the tree still discriminates well between ER+ and ER− tumours. In other words, the tree is simple, but the signal it is using — the *ESR1* split — is genuinely informative.
+
+```{r tree_pr, fig.width=6, fig.height=5}
+plot(
+  res_tree$pr,
+  col      = "#3C5488", lwd = 2,
+  main     = "Precision-Recall Curve — Decision Tree",
+  auc.main = FALSE,
+  xlab     = "Recall", ylab = "Precision"
+)
+abline(h = mean(test_y == "ER+"), lty = 2, col = "grey50")
+legend("bottomleft",
+       legend = sprintf("Decision Tree (AUC-PR = %.3f)", res_tree$auc_pr),
+       col = "#3C5488", lwd = 2, bty = "n")
+```
+
+The PR curve is even more visibly stepwise than the ROC curve, for the same reason: the tree produces only a small number of distinct probability values.
+
+Each abrupt change in the curve corresponds to the threshold crossing from one leaf probability to the other. Despite this coarseness, the AUC-PR of 0.969 is well above the no-skill baseline, confirming that the tree's positive predictions are still highly precise across the operating range.
+
+## Store results
+
+```{r tree_store}
+results <- rbind(results, data.frame(
+  Model    = "Decision Tree",
+  Accuracy = res_tree$acc,
+  AUC_ROC  = res_tree$auc,
+  AUC_PR   = res_tree$auc_pr
+))
+```
+
+## Exercise
+
+::: {.callout-caution icon="false"}
+## ✏️ Exercise 4 — Effect of tree depth under cp = 0
+Fit decision trees with `maxdepth` ∈ {1, 2, 3, 5, 10} while setting `cp = 0` to allow the trees to grow up to the specified depth. Plot accuracy and AUC against depth. What happens to performance as the tree grows deeper? What does this tell you about the bias-variance trade-off?
+:::
+
+::: {.callout-tip collapse="true" icon="false"}
+## 💡 Solution
+
+```{r ex4_solution}
+depth_results <- lapply(c(1, 2, 3, 5, 10), function(d) {
+  set.seed(5381L)
+  fit <- rpart::rpart(
+    formula = er_status ~ ., data = train_df, method = "class",
+    control = rpart::rpart.control(maxdepth = d, cp = 0)
+  )
+  cls <- predict(fit, newdata = test_df, type = "class")
+  pr  <- predict(fit, newdata = test_df, type = "prob")[, "ER+"]
+  res <- evaluate_model(paste0("depth=", d), test_y, cls, pr)
+  data.frame(depth = d, Accuracy = res$acc, AUC_ROC = res$auc, AUC_PR = res$auc_pr)
+})
+depth_df <- do.call(rbind, depth_results)
+
+# Plot
+depth_df |>
+  pivot_longer(-depth, names_to = "metric", values_to = "value") |>
+  ggplot(aes(x = depth, y = value, colour = metric)) +
+  geom_line() + geom_point() +
+  labs(title = "Decision Tree performance vs max depth", y = "Value") +
+  theme_bw()
+```
+
+With these results in hand, the data tell an interesting story:
+
+```{r ex4_solution_table}
+# Table
+depth_df |>
+  as.data.frame() |>
+  kable(caption = "Decision Tree performance vs max depth",
+        col.names = c("max depth", "Accuracy", "AUC-ROC", "AUC-PR"),
+        digits = 4) |>
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+```
+
+
+**Depth 1 — the stump** achieves the *highest* accuracy (93.98%) and a strong AUC (0.926). This is because a single split on *ESR1* already captures most of the dominant signal in the data, as we saw in the logistic regression and the pruned tree visualisation. In other words, a one-node tree is already close to optimal here. 
+
+**Depths 2–10** do not improve performance. Accuracy drops from 93.98% to about 90%, while AUC-ROC and AUC-PR values are similar to depth 1. This is a counterintuitive but important result: adding more splits *hurts* accuracy rather than helping it. Why? Because in the absence of pruning, the tree continues to add splits that capture noise in the training data, splitting the majority ER+ region into smaller subregions with inconsistent predictions. The result is that more test samples are misclassified.
+
+This illustrates the **bias-variance trade-off** concretely: depth 1 has higher bias (a very simple rule) but low variance; deeper trees have lower bias on the training set but higher variance on the test set. This outcome is specific to this dataset: *ESR1* is an unusually dominant single predictor for ER status, so a single split is already close to optimal. In most genomic classification problems, the signal is spread across many genes with more moderate individual effects, and deeper trees (or ensemble methods) are needed to capture it fully.
+
+Notably, the **AUC-PR is almost identical across all depth values** (0.968–0.969). This makes sense: the PR curve measures precision-recall ranking, and the dominant *ESR1* signal produces similar positive-class probability orderings regardless of tree depth. The staircase AUC-PR is driven primarily by the leaf structure, which is fairly stable once the key *ESR1* split is made.
+:::
+
+---
+
+# 5. Random Forests
+
+## Theory and intuition
+
+Random Forests are an **ensemble method** that addresses the high variance of individual decision trees by building many trees on bootstrap samples of the data, each using a **random subset of features** at every split. Predictions are obtained by majority vote (classification) or averaging (regression).
+
+The two sources of randomness — bootstrap sampling and feature subsampling — ensure that the trees are de-correlated, which is what drives the variance reduction compared to bagging alone.
+
+**Strengths:** robust, low variance, can model nonlinear interactions, provides built-in internal feature ranking, and often works well in high-dimensional tabular data.
+**Limitations:** less interpretable than a single tree; training and prediction are slower; can still overfit noisy data with very deep trees.
+
+## Key hyperparameters
+
+::: {.callout-note}
+## Hyperparameters: `ntree`, `mtry`
+- **`ntree`:** number of trees. More trees → more stable predictions but no improvement in bias. Typically 500–1000 is sufficient; monitor the OOB error curve to see when it stabilises.
+- **`mtry`:** number of features randomly sampled at each split. The default for classification is $\sqrt{p}$. Smaller `mtry` → more de-correlated trees but higher per-tree variance. Tunable via cross-validation.
+:::
+
+## Training
+
+We fit a Random Forest using the `randomForest::randomForest` function. We supply the predictor matrix `train_x` and the label vector `train_y` directly (rather than using a formula), which is more efficient when p is large. We set `ntree = 500` and `importance = TRUE` to compute variable importance scores
+after fitting.
+
+```{r rf_train}
+set.seed(seed = 5381L)
+
+rf_fit <- randomForest::randomForest(
+  x          = train_x,
+  y          = train_y,
+  ntree      = 500,
+  importance = TRUE,  # compute variable importance,
+  norm.votes = TRUE   # result of votes as fractions
+)
+print(rf_fit)
+```
+
+The printed summary tells us several important things:
+
+- **No. of variables tried at each split: 63** — this is `mtry`, automatically set to $\lfloor\sqrt{4000}\rfloor = 63$. At each node, only 63 randomly selected genes are considered for splitting, which decorrelates the trees and reduces variance.
+- **OOB estimate of error rate: 6.31%** — only 6.31% of training samples are misclassified by their out-of-bag predictions. This is a free, nearly unbiased estimate of generalisation error computed without ever touching the test set.
+- **Confusion matrix:**
+  - ER− samples: 143 correctly classified, 23 misclassified → **class error 13.9%**
+  - ER+ samples: 510 correctly classified, 21 misclassified → **class error 4.0%**
+
+The asymmetry in per-class error rates directly reflects the class imbalance: ER− is the minority class, so there are fewer ER− examples in bootstrap samples and the trees have less opportunity to learn ER−-specific structure. As a result, the forest tends to classify ER+ slightly better than ER− under the default voting rule.
+
+## Learning curve
+
+As we add more trees to the ensemble, the training error and the out-of-bag (OOB) error evolve differently. Plotting this **learning curve** helps us verify that 500 trees is sufficient and understand the error structure by class.
+
+```{r rf_oob_curve, fig.width=7, fig.height=4}
+oob_df <- data.frame(
+  trees    = seq_len(nrow(rf_fit$err.rate)),
+  OOB      = rf_fit$err.rate[, "OOB"],
+  `ER-`    = rf_fit$err.rate[, "ER-"],
+  `ER+`    = rf_fit$err.rate[, "ER+"],
+  check.names = FALSE
+) |>
+  pivot_longer(-trees, names_to = "class", values_to = "error")
+
+ggplot(oob_df, aes(x = trees, y = error, colour = class)) +
+  geom_line(linewidth = 0.7) +
+  scale_colour_manual(
+    values = c("OOB" = "black", "ER-" = "#E64B35", "ER+" = "#4DBBD5")
+  ) +
+  labs(
+    title  = "Random Forest: OOB error vs number of trees",
+    x      = "Number of trees",
+    y      = "Error rate",
+    colour = "Class"
+  ) +
+  theme_bw(base_size = 11)
+```
+
+The OOB error rate stabilises after approximately `r which.min(rf_fit$err.rate[, "OOB"])` trees, suggesting that 500 trees is more than sufficient for this dataset.
+Additional trees beyond that point mainly stabilise the ensemble rather than improving performance substantially.
+
+Notice that:
+
+- The **black line (overall OOB error)** drops rapidly in the first ~50 trees and then flattens — adding more trees beyond ~100 yields negligible improvement.
+- The **red line (ER− class error)** is persistently higher than the blue line (ER+ class error), again reflecting the class imbalance: the minority ER− class is harder to classify correctly.
+- The **blue line (ER+ class error)** stabilises at a lower plateau, consistent with the fact that ER+ samples are more numerous and therefore better represented in each bootstrap sample.
+
+## Variable importance
+
+Random Forests provide a natural way to rank genes by their contribution to classification, without any external statistical test. We retrieve the variable importance scores using `randomForest::importance(rf_fit, type = 2)`, which returns the **Mean Decrease in Gini impurity** for each gene.
+
+The Gini impurity of a node $t$ is defined as:
+$$G(t) = 1 - \sum_{k} p_k^2$$
+where $p_k$ is the proportion of class $k$ samples in node $t$. A perfectly pure node (all one class) has $G = 0$; a maximally impure node has $G = 0.5$ for binary classification. At each split, the algorithm chooses the gene and threshold that maximally reduces Gini impurity. The **Mean Decrease in Gini** for gene $j$ is then:
+$$\text{MDG}_j = \frac{1}{B} \sum_{b=1}^{B} \sum_{t \in T_b,\, j \text{ used}} \Delta G_{b,t}(j)$$
+where the outer sum is over all $B = 500$ trees, the inner sum is over all nodes in tree $b$ where gene $j$ was used for splitting, and $\Delta G$ is the weighted decrease in impurity. Genes that are used frequently at early (high- impact) nodes accumulate large MDG scores.
+
+We extract the scores, sort genes by MDG in descending order, and plot the top 20:
+
+```{r rf_varimp, fig.width=8, fig.height=5}
+imp_df <- as.data.frame(randomForest::importance(rf_fit, type = 2)) # MeanDecreaseGini
+imp_df$gene <- rownames(imp_df)
+colnames(imp_df)[1] <- "MeanDecreaseGini"
+
+imp_df |>
+  arrange(desc(MeanDecreaseGini)) |>
+  head(20) |>
+  ggplot(aes(x = reorder(gene, MeanDecreaseGini), y = MeanDecreaseGini)) +
+  geom_col(fill = "#4DBBD5", alpha = 0.85) +
+  coord_flip() +
+  labs(
+    title = "Top 20 genes by Mean Decrease in Gini impurity",
+    x     = NULL,
+    y     = "Mean Decrease Gini"
+  ) +
+  theme_bw(base_size = 11)
+```
+
+The ranking provides a biologically interesting picture, though it also contains some surprises. *ESR1* leads with the highest MDG score (5.40) — it is the most informative single gene for ER status, consistent with the single-gene logistic regression and the violin plots from the data exploration section. The second and third positions are occupied by *C5AR2* (MDG 5.29) and *AGR3* (MDG 4.62), both of which are known luminal breast cancer markers, though less recognised than the canonical ER pathway genes. *THSD4*, *DNALI1*, *FSIP1*, and *CCDC170* also rank highly — these are less well-characterised in the context of ER status, but their presence in the ranking suggests that the Random Forest is capturing coordinated expression patterns associated with the luminal subtype beyond the most obvious pathway genes. *GATA3* (rank 12, MDG 2.43) and *FOXA1* (rank 14, MDG 2.37) — the two canonical ER co-regulators — do appear in the top 20, but lower than one might expect given their biological importance. This illustrates a known property of tree-based importance scores: highly correlated genes (like *ESR1*, *GATA3*, and *FOXA1*, which are co-expressed in the luminal lineage) share credit, so the importance of each individual gene may be underestimated relative to its biological role. *CA12* (rank 9) is another established luminal marker.
+
+The fact that known ER-associated genes appear near the top is reassuring, but variable importance should still be interpreted as a model-based ranking rather than a causal or definitive biomarker ordering.
+
+## Evaluation
+
+We predict class labels and class probabilities on the test set using `predict`. Note that for Random Forests we supply the test feature matrix `test_x` directly (not the data frame `test_df`), consistent with how we supplied the training data as a matrix above.
+
+```{r rf_predict}
+rf_classes <- predict(rf_fit, newdata = test_x, type = "class")
+rf_probs   <- predict(rf_fit, newdata = test_x, type = "prob")[, "ER+"]
+```
+
+```{r rf_evaluate}
+res_rf <- evaluate_model("Random Forest", test_y, rf_classes, rf_probs)
+
+res_rf$cm |>
+  as.data.frame() |>
+  kable(caption = "Confusion matrix — Random Forest") |>
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+
+sprintf("Accuracy: %.2f%%  |  AUC-ROC: %.4f  |  AUC-PR: %.4f",
+        res_rf$acc * 100, res_rf$auc, res_rf$auc_pr)
+```
+
+The Random Forest achieves **94.65% accuracy, AUC-ROC = 0.9444, and AUC-PR = 0.9795** on the test set — consistent with the OOB error estimate of 6.31%. The OOB estimate is an internal estimate computed from out-of-bag samples, so it is useful for model selection and early diagnostics, but it is still not a substitute for the held-out test set.
+
+In this tutorial, the RF AUC-PR of 0.9795 is the third-highest among all models (after SVM at 0.980 and GBM at 0.978). Looking at the confusion matrix, misclassifications are split symmetrically: 8 ER− samples are incorrectly predicted as ER+, and 8 ER+ samples are incorrectly predicted as ER−, suggesting no strong directional bias at the default 0.5 threshold.
+
+## ROC and Precision-Recall curves
+
+The ROC curve summarises the random forest's discriminatory performance across all possible probability thresholds. Before interpreting the curves, note that a Random Forest produces a score by aggregating votes across many trees. In the `randomForest` implementation, classification votes are returned as fractions when `norm.votes=TRUE`, and these fractions are what we use as the score for ROC and PR analysis. Because the score comes from an ensemble of trees rather than a single split rule, the curves are usually much smoother than those of a single decision tree, while still retaining the stepwise character of finite score levels.
+
+```{r rf_roc, fig.width=6, fig.height=5}
+plot(
+  res_rf$roc,
+  main  = "ROC Curve — Random Forest",
+  col   = "#F39B7F", lwd = 2,
+  print.thres = "best", print.thres.best.method = "youden"
+)
+```
+
+The Youden-optimal threshold is 0.640, which indicates that the score values produced by the forest are best separated at a cutoff above 0.5 for this dataset; this is the threshold that maximises the balance between sensitivity and specificity.
+
+```{r rf_pr, fig.width=6, fig.height=5}
+plot(
+  res_rf$pr,
+  col      = "#F39B7F", lwd = 2,
+  main     = "Precision-Recall Curve — Random Forest",
+  auc.main = FALSE,
+  xlab     = "Recall", ylab = "Precision"
+)
+abline(h = mean(test_y == "ER+"), lty = 2, col = "grey50")
+legend("bottomleft",
+       legend = sprintf("Random Forest (AUC-PR = %.3f)", res_rf$auc_pr),
+       col = "#F39B7F", lwd = 2, bty = "n")
+```
+
+The RF PR curve is noticeably smoother than the single-tree PR curve because the ensemble aggregates votes across many trees, yielding a finer-grained score distribution. It maintains high precision across most of the recall range before a modest drop near recall = 1.0. The AUC-PR of 0.979 confirms that the ensemble’s positive-class scores remain highly informative across operating thresholds.
+
+## Store results
+
+```{r rf_store}
+results <- rbind(results, data.frame(
+  Model    = "Random Forest",
+  Accuracy = res_rf$acc,
+  AUC_ROC  = res_rf$auc,
+  AUC_PR   = res_rf$auc_pr
+))
+```
+
+## Exercise
+
+::: {.callout-caution icon="false"}
+## ✏️ Exercise 5 — Feature importance and minimal gene sets
+The top 20 genes from the variable importance plot capture most of the discriminatory signal. Retrain a Random Forest using only the top 20 genes and compare accuracy and AUC to the full model. What does this suggest about dimensionality reduction before classification?
+:::
+
+::: {.callout-tip collapse="true" icon="false"}
+## 💡 Solution
+
+```{r ex5_solution}
+set.seed(5381L)
+top20_genes <- imp_df |> arrange(desc(MeanDecreaseGini)) |> head(20) |> pull(gene)
+
+rf_top20 <- randomForest::randomForest(
+  x = train_x[, top20_genes],
+  y = train_y,
+  ntree = 500
+)
+rf_top20_cls   <- predict(rf_top20, newdata = test_x[, top20_genes], type = "class")
+rf_top20_probs <- predict(rf_top20, newdata = test_x[, top20_genes], type = "prob")[, "ER+"]
+res_rf_top20   <- evaluate_model("RF top-20", test_y, rf_top20_cls, rf_top20_probs)
+sprintf("RF top-20 genes — Accuracy: %.2f%%  |  AUC-ROC: %.4f  |  AUC-PR: %.4f",
+        res_rf_top20$acc * 100, res_rf_top20$auc, res_rf_top20$auc_pr)
+```
+
+The top-20 gene Random Forest achieves **Accuracy: 94.98%, AUC-ROC: 0.9364, AUC-PR: 0.9687** — compared to the full 4,000-gene model (**94.65% accuracy, AUC-ROC: 0.9444, AUC-PR: 0.9795**). The accuracy is slightly higher, while the AUC-ROC and AUC-PR are slightly lower. With a single train/test split, these differences are modest and should not be overinterpreted.
+
+Importantly, this is not a pure “same model with fewer genes” comparison: when we reduce the feature set from 4,000 genes to 20 genes, the default `mtry` changes as well, so the forest is also being fit with a different split-search setting. A fair comparison would tune `mtry` separately or hold it fixed across models. 
+
+Nevertheless, the result is still informative. It suggests that a relatively small subset of genes captures much of the predictive signal for ER status, and that the remaining genes contribute comparatively little to this particular classification task. Reducing dimensionality before training can therefore be useful for speed, memory usage, and interpretability, even if the performance gain is small.
+
+This finding reinforces the broader message from LASSO logistic regression: feature selection (whether explicit via LASSO or implicit via importance thresholding) is a powerful tool in high-dimensional genomic classification.
+:::
+
+---
+
+# 6. Gradient Boosting Machines (GBM)
+
+## Theory and intuition
+
+GBMs build an ensemble of trees **sequentially**, where each new tree is fitted to the **residuals** of the current ensemble. To be more precise: rather than fitting to the raw residuals (as in ordinary least squares regression), GBM fits each new tree to the **negative gradient of the loss function** with respect to the current predictions. For a Bernoulli (logistic) loss — which is what we use for binary classification — this negative gradient is closely related to the difference between the observed class label (0 or 1) and the current predicted probability. In other words, each tree focuses on the *mistakes* of the current ensemble: samples where the predicted probability is far from the true label contribute the most to the gradient, and the new tree is trained to correct those errors. This is why boosting is sometimes described as "learning from mistakes": at each step, the algorithm identifies where the current model is wrong and adds a tree that moves the predictions in the right direction — but only by a small step controlled by the learning rate.
+
+This is in contrast to Random Forests, where trees are built independently in parallel.
+
+**Strengths:** typically very high predictive performance, naturally handles mixed feature types and missing data (in some implementations), built-in feature importance.  
+**Limitations:** more hyperparameters to tune than Random Forests, prone to overfitting if not carefully regularised, slower to train (sequential by nature).
+
+## Key hyperparameters
+
+::: {.callout-note}
+## Hyperparameters: `n.trees`, `shrinkage`, `interaction.depth`
+- **`n.trees`:** total number of boosting iterations (trees). More iterations → lower bias, but risk of overfitting. Use cross-validation to find the optimal number.
+- **`shrinkage` (learning rate, η):** scales the contribution of each tree. Smaller η → more trees needed, but usually better generalisation. Typical values: 0.001–0.1.
+- **`interaction.depth`:** maximum depth of each tree. Depth 1 = additive model (stumps); depth 2–4 allows pairwise interactions.
+
+The general advice is: set `shrinkage` small (≤ 0.01) and `n.trees` large, then use cross-validation to determine the optimal number of trees.
+:::
+
+## Training
+
+We fit a GBM using the `gbm::gbm` function. Before training, note the encoding step: `gbm` with `distribution = "bernoulli"` requires the outcome to be **numeric** (0 or 1) rather than a factor. We therefore recode ER− → 0 and ER+ → 1 before passing the data to the function.
+
+::: {.callout-warning}
+## Binary outcome encoding
+The `gbm` package with `distribution = "bernoulli"` expects a numeric outcome in {0, 1}. We recode ER− → 0 and ER+ → 1 before fitting.
+:::
+
+We set `n.trees = 500` (the upper limit of our grid), `interaction.depth = 3` (each tree can model three-way interactions), and `shrinkage = 0.01`. Crucially, we pass `cv.folds = 5` to perform **5-fold cross-validation internally** during training. This means that, while building each successive tree, `gbm` maintains five parallel sub-models — each trained on 80% of the data and validated on the remaining 20%. This allows `gbm` to estimate the out-of-sample deviance at each boosting iteration without using the test set. The cross-validated deviance curve is then used to select the number of trees that gives the best generalisation performance.
+
+```{r gbm_train, message=FALSE}
+set.seed(seed = 5381L)
+
+train_y_bin <- ifelse(train_y == "ER+", 1, 0)
+test_y_bin  <- ifelse(test_y  == "ER+", 1, 0)
+
+gbm_fit <- gbm::gbm(
+  formula           = er_status ~ .,
+  distribution      = "bernoulli",
+  data              = data.frame(train_x, er_status = train_y_bin),
+  n.trees           = 500,
+  interaction.depth = 3,
+  shrinkage         = 0.01,
+  cv.folds          = 5,       # 5-fold CV to find optimal number of trees
+  verbose           = FALSE
+)
+
+# Find the optimal number of trees via cross-validation
+best_iter <- gbm::gbm.perf(gbm_fit, method = "cv", plot.it = TRUE)
+cat("Optimal number of trees:", best_iter, "\n")
+```
+
+The plot from `gbm.perf` shows the training deviance and the cross-validated deviance as a function of the number of trees:
+
+- **Black line (training deviance):** decreases monotonically — adding more trees always reduces training error, but the model eventually overfits.
+- **Green line (CV deviance):** decreases initially, then levels off or increases slightly once the model begins to overfit the training data. The vertical dashed blue line marks the **optimal number of trees** (the minimum of the green curve).
+
+In our case, the optimal number of trees is **314**, well below the maximum of 500 — confirming that stopping early prevents overfitting. Using 500 trees instead of 314 would reduce training deviance further but increase test error.
+This is exactly the scenario that the `cv.folds` argument is designed to prevent: the ensemble keeps fitting the training data better as trees are added, but the cross-validated error shows when additional complexity stops paying off.
+
+## Variable importance
+
+In GBMs, variable importance is measured by the **relative influence** of each predictor: the total reduction in the loss function (here Bernoulli deviance) attributable to splits on that predictor, averaged over all trees and normalised to sum to 100. We retrieve these scores using `summary(gbm_fit)` and plot the top 20 genes.
+
+```{r gbm_varimp, fig.width=8, fig.height=5}
+gbm_imp <- summary(gbm_fit, n.trees = best_iter, plotit = FALSE)
+gbm_imp |>
+  head(20) |>
+  ggplot(aes(x = reorder(var, rel.inf), y = rel.inf)) +
+  geom_col(fill = "#7E6148", alpha = 0.85) +
+  coord_flip() +
+  labs(
+    title = "GBM: Top 20 genes by relative influence",
+    x     = NULL,
+    y     = "Relative influence (%)"
+  ) +
+  theme_bw(base_size = 11)
+```
+
+The relative influence plot reveals an extremely **concentrated** importance structure: *ESR1* alone accounts for more than **63.9% of the total relative influence**, dwarfing all other genes. This does not mean that the remaining genes are unimportant; rather, it means that the boosting process repeatedly finds ESR1 to be the strongest splitter, so it accumulates most of the explained loss reduction. Because boosting is sequential, a dominant predictor can absorb much of the available signal, and correlated genes may receive less credit than their biological relevance would suggest.
+
+Several luminal-associated genes, including *AGR3* and *CA12*, also appear in the top ranks, which is reassuring. However, relative influence is a model-based ranking rather than a causal or definitive biomarker ordering, so the lower positions should be interpreted cautiously.
+
+The consistent appearance of known ER-associated genes in the top 20 is encouraging and aligns with the signal seen in the logistic regression and Random Forest analyses. It suggests that the GBM is learning biologically meaningful structure, while also reinforcing the fact that *ESR1* is by far the dominant predictor in this dataset.
+
+## Evaluation
+
+We now predict on the test set using `predict()` with `type = "response"`, which returns probabilities on the [0, 1] scale (the inverse logit of the raw GBM score). We then threshold at 0.5 to obtain predicted class labels.
+
+```{r gbm_predict}
+gbm_probs   <- predict(gbm_fit, newdata = test_df, n.trees = best_iter,
+                       type = "response")
+gbm_classes <- factor(
+  ifelse(gbm_probs > 0.5, "ER+", "ER-"),
+  levels = levels(test_y)
+)
+```
+
+```{r gbm_evaluate}
+res_gbm <- evaluate_model("GBM", test_y, gbm_classes, gbm_probs)
+
+res_gbm$cm |>
+  as.data.frame() |>
+  kable(caption = "Confusion matrix — GBM") |>
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+
+sprintf("Accuracy: %.2f%%  |  AUC-ROC: %.4f  |  AUC-PR: %.4f",
+        res_gbm$acc * 100, res_gbm$auc, res_gbm$auc_pr)
+```
+
+The GBM achieves **94.65% accuracy, AUC-ROC = 0.9418, and AUC-PR = 0.9776**. Looking at the confusion matrix: 55 ER− correctly classified, 7 misclassified as ER+ (false positives); 228 ER+ correctly classified, 9 misclassified as ER− (false negatives). The total of 16 misclassifications is slightly fewer than KNN and SVM (18 each). 
+
+The AUC-PR of 0.9776 indicates excellent positive-class ranking and precision-recall trade-off across thresholds. This reflects the model's strong discriminatory signal and its smooth probability estimates. 
+
+In clinical terms, false negatives (ER+ patients classified as ER−) are the more costly error type: these patients would be denied hormone therapy they could benefit from. The ROC and PR curves allow us to explore threshold choices that reduce false negatives at the cost of more false positives — a trade-off
+that should be guided by clinical priorities rather than fixed at 0.5 by default.
+
+## ROC and Precision-Recall curves
+
+Before interpreting the curves, note that the GBM returns fitted probability estimates on the [0, 1] scale when `type = "response"` is used. These scores come from the Bernoulli boosting model at the selected number of trees and are used here as ranking scores for ROC and Precision-Recall analysis. Because the ensemble is built sequentially and aggregates many small trees, it typically produces a more finely graded score distribution than a single decision tree.
+
+```{r gbm_roc, fig.width=6, fig.height=5}
+plot(
+  res_gbm$roc,
+  main  = "ROC Curve — GBM",
+  col   = "#8491B4", lwd = 2,
+  print.thres = "best", print.thres.best.method = "youden"
+)
+```
+
+The ROC curve rises steeply, showing that the GBM separates ER+ and ER− samples well across a wide range of thresholds. The Youden-optimal threshold is 0.553, with sensitivity 0.903 and specificity 0.962. Notably, the GBM achieves **slightly higher specificity (0.962)** at the same sensitivity level (0.903) compared to both the decision tree (0.949) and the Random Forest (0.954) — meaning fewer ER− patients are incorrectly assigned ER+ status at this operating point.
+
+```{r gbm_pr, fig.width=6, fig.height=5}
+plot(
+  res_gbm$pr,
+  col      = "#8491B4", lwd = 2,
+  main     = "Precision-Recall Curve — GBM",
+  auc.main = FALSE,
+  xlab     = "Recall", ylab = "Precision"
+)
+abline(h = mean(test_y == "ER+"), lty = 2, col = "grey50")
+legend("bottomleft",
+       legend = sprintf("GBM (AUC-PR = %.3f)", res_gbm$auc_pr),
+       col = "#8491B4", lwd = 2, bty = "n")
+```
+
+The PR curve stays close to the top of the plot for most of the recall range, which means that positive predictions remain highly reliable even when the threshold is lowered to recover more ER+ cases. The AUC-PR of 0.978 is very high, indicating strong positive-class ranking performance across thresholds. It is slightly below the SVM and slightly above the decision tree and KNN, which is consistent with the GBM’s strong but not perfect separation of the two classes.
+
+## Store results
+
+```{r gbm_store}
+results <- rbind(results, data.frame(
+  Model    = "GBM",
+  Accuracy = res_gbm$acc,
+  AUC_ROC  = res_gbm$auc,
+  AUC_PR   = res_gbm$auc_pr
+))
+```
+
+## Exercise
+
+::: {.callout-caution icon="false"}
+## ✏️ Exercise 6 — Learning rate and number of trees
+Re-fit the GBM with a smaller learning rate (`shrinkage = 0.001`) and more trees (`n.trees = 2000`), again using 5-fold CV to find the optimal iteration. Does a slower learning rate improve AUC? What is the trade-off?
+:::
+
+::: {.callout-tip collapse="true" icon="false"}
+## 💡 Solution
+
+```{r ex6_solution}
+set.seed(5381L)
+gbm_slow <- gbm::gbm(
+  formula = er_status ~ .,
+  distribution = "bernoulli",
+  data = data.frame(train_x, er_status = train_y_bin),
+  n.trees = 2000, interaction.depth = 3,
+  shrinkage = 0.001, cv.folds = 5, verbose = FALSE
+)
+best_iter_slow <- gbm::gbm.perf(gbm_slow, method = "cv", plot.it = FALSE)
+gbm_slow_probs <- predict(gbm_slow, newdata = test_df,
+                          n.trees = best_iter_slow, type = "response")
+gbm_slow_cls   <- factor(ifelse(gbm_slow_probs > 0.5, "ER+", "ER-"),
+                         levels = levels(test_y))
+res_gbm_slow   <- evaluate_model("GBM slow", test_y, gbm_slow_cls, gbm_slow_probs)
+sprintf("GBM (slow) — Accuracy: %.2f%%  |  AUC-ROC: %.4f  |  AUC-PR: %.4f",
+        res_gbm_slow$acc * 100, res_gbm_slow$auc, res_gbm_slow$auc_pr)
+```
+
+The slower GBM achieves **Accuracy: 94.98%, AUC-ROC: 0.9456, AUC-PR: 0.9800** — a marginal improvement over the faster model (Accuracy: 94.65%, AUC-ROC: 0.9418, AUC-PR: 0.9776). On this split, the smaller learning rate gives a modest gain in discrimination.
+
+This is consistent with the general behaviour of boosting: smaller values of `shrinkage` usually improve out-of-sample predictive performance, but they also require many more trees and therefore more computation time. The optimal number of iterations typically increases as the learning rate decreases, which is why we set `n.trees` large and let cross-validation determine where to stop.
+
+**What does "set shrinkage small and let CV stop early" mean in practice?**
+
+The idea is to use the following three-step strategy:
+
+1. **Set a small learning rate** (`shrinkage`, e.g. 0.001–0.01) so that each new tree contributes only a tiny increment to the ensemble. This makes the model less sensitive to any individual tree and generally improves generalisation. Smaller shrinkage often improves out-of-sample predictive performance, but usually requires more iterations.
+2. **Set `n.trees` large** (e.g. 1000–5000) so that there is enough room for the ensemble to converge, even with small steps.
+3. **Use `cv.folds`** to track the cross-validation error at every boosting iteration in parallel. After fitting, `gbm.perf(method = "cv")` identifies the iteration with the minimum CV error — this is `best_iter`. When predicting, we pass `n.trees = best_iter` to the `predict()` call, so we only use trees up to the optimal stopping point.
+
+In effect, `cv.folds` implements **early stopping** based on held-out (cross-validation) performance: the model is trained for `n.trees` steps in total, but we use only the first `best_iter` steps for final prediction. This avoids overfitting without the need to manually tune `n.trees` by trial and error.
+:::
+
+---
+
+# Performance Comparison
+
+We have now trained and evaluated six classifiers on the same TCGA BRCA test set. This final section brings all the results together for a direct comparison and draws broader conclusions about model selection in high-dimensional genomic classification.
+
+## Summary table
+
+The table below collects the test-set accuracy and AUC for each model. The row with the best AUC is highlighted.
+
+```{r comparison_table}
+results |>
+  mutate(
+    Accuracy = paste0(round(Accuracy * 100, 2), "%"),
+    AUC_ROC  = round(AUC_ROC, 4),
+    AUC_PR   = round(AUC_PR, 4)
+  ) |>
+  kable(caption = "Classification performance on the TCGA BRCA test set",
+        col.names = c("Model", "Accuracy", "AUC-ROC", "AUC-PR")) |>
+  kable_styling(bootstrap_options = c("striped", "hover", "bordered"),
+                full_width = FALSE) |>
+  column_spec(3, bold = TRUE) |>
+  column_spec(4, bold = TRUE) |>
+  row_spec(which.max(results$AUC_ROC), background = "#d9f0e8", bold = TRUE)
+```
+
+The most striking feature of the table is the **gap between the unregularised logistic regression and all other methods**: using all 4,000 genes without regularisation yields essentially random performance (~50% accuracy, AUC-ROC ≈ 0.50, AUC-PR near the prevalence baseline), while every other approach achieves 93–95% accuracy and AUC-ROC > 0.92. This gap is not a property of logistic regression as a method, but of the failure to regularise in a high-dimensional setting.
+
+Among the well-performing models, the AUC-ROC differences are modest (~0.02 spread). The **SVM** is slightly ahead on both AUC-ROC and AUC-PR in this split, with Random Forest and GBM very close behind. The ROC and PR curves show that once the model is properly regularised or ensemblized, performance is consistently strong across a range of methods.
+
+## Overlaid ROC curves
+
+Plotting all ROC curves together on the same axes is the best way to compare classifiers holistically — it shows performance simultaneously across *all* decision thresholds rather than at a single operating point.
+
+```{r comparison_roc, fig.width=7, fig.height=6}
+roc_list <- list(
+  "Logistic Regression" = res_glm$roc,
+  "KNN (k=10)"          = res_knn$roc,
+  "SVM (RBF)"           = res_svm$roc,
+  "Decision Tree"       = res_tree$roc,
+  "Random Forest"       = res_rf$roc,
+  "GBM"                 = res_gbm$roc
+)
+
+roc_colours <- c("#E64B35", "#4DBBD5", "#00A087", "#3C5488", "#F39B7F", "#8491B4")
+
+plot(
+  roc_list[[1]],
+  col  = roc_colours[1],
+  lwd  = 2,
+  main = "ROC Curves — All Classifiers",
+  xlab = "False Positive Rate (%)",
+  ylab = "True Positive Rate (%)"
+)
+for (i in seq_along(roc_list)[-1]) {
+  plot(roc_list[[i]], col = roc_colours[i], lwd = 2, add = TRUE)
+}
+legend(
+  "bottomright",
+  legend = paste0(names(roc_list), " (AUC-ROC=",
+                  round(sapply(roc_list, function(r) as.numeric(pROC::auc(r))), 3), ")"),
+  col    = roc_colours,
+  lwd    = 2,
+  cex    = 0.75,
+  bty    = "n"
+)
+```
+
+The unregularised logistic regression (red) sits along the diagonal — random performance — and is clearly separated from the cluster of well-performing models. Among the remaining classifiers, the curves are tightly grouped in the upper-left region of the plot, all achieving strong discrimination.
+
+A few observations worth noting:
+
+- **KNN, SVM, Random Forest, and GBM** all produce curves that are much closer to the top-left corner than the decision tree, reflecting strong class separation.
+- **The decision tree** (dark blue) shows the most "staircase" shape — a consequence of having only a few distinct probability levels.
+- **Random Forest and GBM** (orange and purple) have slightly smoother curves than the single tree because ensemble averaging yields finer-grained score values.
+- **SVM** (green) is the strongest overall performer in this split, with the highest AUC-ROC and AUC-PR.
+
+
+## Overlaid Precision-Recall curves
+
+The PR curves complement the ROC analysis by focusing exclusively on the positive class (ER+). They are particularly informative in imbalanced settings because the no-skill baseline equals the positive-class prevalence rather than 0.50
+(recall that ~80% of samples are ER+, so the random baseline for AUC-PR is approximately 0.80).
+
+```{r comparison_pr, fig.width=7, fig.height=6}
+pr_list <- list(
+  "Logistic Regression" = res_glm$pr,
+  "KNN (k=10)"          = res_knn$pr,
+  "SVM (RBF)"           = res_svm$pr,
+  "Decision Tree"       = res_tree$pr,
+  "Random Forest"       = res_rf$pr,
+  "GBM"                 = res_gbm$pr
+)
+
+# Plot the first PR curve, then overlay the rest
+plot(
+  pr_list[[1]],
+  col     = roc_colours[1],
+  lwd     = 2,
+  main    = "Precision-Recall Curves — All Classifiers",
+  auc.main = FALSE,
+  xlab    = "Recall",
+  ylab    = "Precision"
+)
+for (i in seq_along(pr_list)[-1]) {
+  plot(pr_list[[i]], col = roc_colours[i], lwd = 2, add = TRUE)
+}
+# Add the random baseline (prevalence of ER+)
+er_prevalence <- mean(test_y == "ER+")
+abline(h = er_prevalence, lty = 2, col = "grey50")
+text(0.05, er_prevalence + 0.01, sprintf("Random baseline (%.0f%%)", er_prevalence * 100),
+     cex = 0.75, col = "grey40", adj = 0)
+legend(
+  "bottomleft",
+  legend = paste0(names(pr_list), " (AUC-PR=",
+                  round(results$AUC_PR, 3), ")"),
+  col    = roc_colours,
+  lwd    = 2,
+  cex    = 0.75,
+  bty    = "n"
+)
+```
+
+The dashed horizontal line marks the random classifier baseline (AUC-PR ≈ 0.79, equal to ER+ prevalence). The unregularised logistic regression (red, AUC-PR = 0.793) hugs this baseline throughout — its positive predictions are no better than chance. All other classifiers cluster tightly near the top of the plot, all achieving AUC-PR in the range 0.969–0.981.
+
+Looking at the actual AUC-PR values:
+
+| Model | AUC-PR |
+|---|---|
+| SVM (RBF) | 0.981 |
+| Random Forest | 0.979 |
+| GBM | 0.978 |
+| KNN (k=10) | 0.971 |
+| Decision Tree | 0.969 |
+| Logistic Regression (all genes) | 0.793 |
+
+The **SVM** achieves the highest AUC-PR (0.981), followed closely by Random Forest (0.979) and GBM (0.978). The decision tree is slightly lower, while KNN sits in between. The most important takeaway is that the well-performing models maintain very high precision (~0.97–0.99) across most of the recall range before a characteristic drop at Recall → 1.0, where the hardest-to-classify samples are forced into predictions.
+
+## Accuracy bar chart
+
+```{r comparison_bar, fig.width=8, fig.height=4}
+results |>
+  arrange(desc(Accuracy)) |>
+  mutate(Model = factor(Model, levels = Model)) |>
+  ggplot(aes(x = Model, y = Accuracy * 100, fill = Model)) +
+  geom_col(alpha = 0.85, show.legend = FALSE) +
+  geom_text(aes(label = paste0(round(Accuracy * 100, 1), "%")),
+            vjust = -0.4, size = 3.5) +
+  scale_fill_manual(values = setNames(roc_colours, results$Model)) +
+  scale_y_continuous(limits = c(0, 105)) +
+  labs(
+    title = "Test set accuracy by classifier",
+    x     = NULL,
+    y     = "Accuracy (%)"
+  ) +
+  theme_bw(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+```
+
+The bar chart reinforces the picture from the ROC and PR comparisons. With the exception of the unregularised logistic regression, all models cluster tightly between 93% and 95% accuracy. The differences are small enough that other considerations — interpretability, speed, ease of tuning, robustness to hyperparameter choice — should inform the final model selection alongside raw performance metrics.
+
+::: {.callout-note}
+## Key takeaways
+1. **Regularisation is non-negotiable in high dimensions.** Unregularised logistic regression fails catastrophically with 4,000 features and ~700 samples. LASSO, ensemble methods, and distance-based methods all handle this correctly.
+2. **Performance differences between well-regularised models are small.** Once you use an appropriate method, the choice between KNN, SVM, Random Forest, and GBM matters less than the choice between regularised and unregularised approaches.
+3. **Single-train/test split results should be interpreted cautiously.** The small performance differences between models (< 1% accuracy) are likely within the variance of the split. Cross-validation gives more reliable rankings — as we demonstrate in the next section.
+4. **Use multiple metrics in imbalanced settings.** Accuracy alone is misleading with ~80% ER+ samples. **AUC-ROC** provides a threshold-independent view of discrimination, and **AUC-PR** is the strictest test: a model that maintains high precision across all recall levels is genuinely useful for clinical positive-class prediction, not just good at ranking.
+5. **Clinical context matters.** In an oncology setting, **minimising false negatives** (ER+ patients missed and denied hormone therapy) may justify operating at a lower threshold than the Youden optimum, accepting lower specificity in exchange for higher sensitivity. The ROC and PR curves together provide the tools to reason about this trade-off explicitly.
+:::
+
+---
+
+# Bonus: A Brief Cross-Validation Example
+
+::: {.callout-tip}
+## Why cross-validation?
+A single 70/30 split gives a point estimate of performance, but the variance is high — a different random split can shift accuracy by several percentage points. 
+
+**K-fold cross-validation** (CV) partitions the entire dataset into k folds of equal size. In each of the k iterations, one fold is held out as the test set and the model is trained on the remaining k − 1 folds. The k performance estimates are then averaged. Because every sample appears in the test set exactly once, k-fold CV uses the data much more efficiently than a single split.
+:::
+
+Here we demonstrate 5-fold CV using the Random Forest classifier. We manually create the fold assignments to keep the code transparent, though in practice packages such as `caret` or `tidymodels` automate this process.
+
+```{r cv_example, message=FALSE}
+set.seed(5381L)
+
+k_folds  <- 5
+fold_ids <- sample(rep(seq_len(k_folds), length.out = nrow(x)))
+
+cv_results <- lapply(seq_len(k_folds), function(fold) {
+  idx_train <- which(fold_ids != fold)
+  idx_test  <- which(fold_ids == fold)
+
+  cv_train_x <- x[idx_train, , drop = FALSE]
+  cv_test_x  <- x[idx_test,  , drop = FALSE]
+  cv_train_y <- y[idx_train]
+  cv_test_y  <- y[idx_test]
+
+  # Random Forest on this fold
+  rf_cv <- randomForest::randomForest(x = cv_train_x, y = cv_train_y,
+                                      ntree = 200)
+  rf_cv_prob <- predict(rf_cv, newdata = cv_test_x, type = "prob")[, "ER+"]
+  rf_cv_cls  <- predict(rf_cv, newdata = cv_test_x, type = "class")
+
+  acc <- mean(rf_cv_cls == cv_test_y)
+  roc_obj <- pROC::roc(cv_test_y, rf_cv_prob,
+                       levels = c("ER-", "ER+"),
+                       direction = "<", quiet = TRUE)
+  auc_roc <- as.numeric(pROC::auc(roc_obj))
+  pr_obj  <- PRROC::pr.curve(
+    scores.class0 = rf_cv_prob[cv_test_y == "ER+"],
+    scores.class1 = rf_cv_prob[cv_test_y == "ER-"],
+    curve = FALSE
+  )
+  auc_pr <- pr_obj$auc.integral
+
+  data.frame(fold = fold, Accuracy = acc, AUC_ROC = auc_roc, AUC_PR = auc_pr, check.names = FALSE)
+})
+
+cv_df <- do.call(rbind, cv_results)
+
+cv_df |>
+  kable(
+    caption = paste0(
+      k_folds, "-fold CV results — Random Forest  |  ",
+      "mean Accuracy: ", round(mean(cv_df$Accuracy) * 100, 2), "%  |  ",
+      "mean AUC-ROC: ", round(mean(cv_df$AUC_ROC), 4), "  |  ",
+      "mean AUC-PR: ",  round(mean(cv_df$AUC_PR),  4)
+    ),
+    col.names = c("Fold", "Accuracy", "AUC-ROC", "AUC-PR"),
+    digits = 4
+  ) |>
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+```
+
+The per-fold results show some variability, which is normal in cross-validation. Fold 3 yields the lowest accuracy, while Fold 5 yields the highest. This spread reflects sampling variability and fold composition: some folds contain a slightly harder mix of samples than others. Even so, all five folds perform well, with accuracy above 90% and AUC-ROC above 0.93, indicating that the Random Forest is stable across different partitions of the TCGA BRCA data.
+
+The summary statistics provide a more stable estimate than a single 70/30 split, but they should still be interpreted as an internal validation result rather than a definitive external benchmark.
+
+```{r cv_sd}
+cat(sprintf(
+  "Accuracy: mean=%.2f%%  sd=%.2f%%\nAUC-ROC: mean=%.4f  sd=%.4f\nAUC-PR:  mean=%.4f  sd=%.4f\n",
+  mean(cv_df$Accuracy)*100, sd(cv_df$Accuracy)*100,
+  mean(cv_df$AUC_ROC), sd(cv_df$AUC_ROC),
+  mean(cv_df$AUC_PR),  sd(cv_df$AUC_PR)
+))
+```
+
+The cross-validation summary is more stable than the single train/test split:
+
+- **Mean accuracy: 93.47% (SD = 1.78%).** The single-split accuracy of 94.65% falls comfortably within this range, suggesting that the earlier result was not unusually lucky or unlucky. However, the spread across folds shows that performance still depends on the particular partition.
+
+- **Mean AUC-ROC: 0.9539 (SD = 0.0134).** Slightly higher than the single-split value of 0.9444, with a low standard deviation indicating that the Random Forest’s ranking performance is fairly consistent across folds.
+
+- **Mean AUC-PR: 0.9798 (SD = 0.0125).** This is also very consistent across folds, but note that the PR baseline depends on class prevalence, so AUC-PR should ideally be computed on pooled out-of-fold predictions or on stratified folds.
+
+Taken together, these results support the broader conclusion of the tutorial: the Random Forest is a robust classifier for ER status prediction in TCGA BRCA, and the single-split results are broadly in line with its cross-validated performance.
+
+---
+
+# Session Info
+
+The section below records the exact versions of R and all loaded packages used to
+generate this document. Including it at the end of every analysis script is good
+practice for reproducibility.
+
+```{r session_info}
+sessionInfo()
+```

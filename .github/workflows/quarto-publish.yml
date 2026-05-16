@@ -39,6 +39,18 @@ jobs:
             dbscan
             cluster
             mclust
+            dplyr
+            tidyr
+            kableExtra
+            glmnet
+            class
+            e1071
+            rpart
+            rpart.plot
+            randomForest
+            gbm
+            pROC
+            PRROC
 
       - name: Set up Quarto
         uses: quarto-dev/quarto-actions/setup@v2
