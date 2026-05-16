@@ -1,23 +1,27 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://alebarberis.github.io/ai-clinical-research/labs/lab1b-working-with-data.html</loc>
-    <lastmod>2026-04-17T09:18:32.658Z</lastmod>
+    <loc>https://alebarberis.github.io/ai-clinical-research/labs/lab2b-unsupervised-clustering.html</loc>
+    <lastmod>2026-05-16T06:32:26.300Z</lastmod>
   </url>
   <url>
     <loc>https://alebarberis.github.io/ai-clinical-research/labs/lab2a-unsupervised-dimensionality-reduction.html</loc>
-    <lastmod>2026-04-17T09:18:32.658Z</lastmod>
+    <lastmod>2026-05-16T06:32:26.300Z</lastmod>
+  </url>
+  <url>
+    <loc>https://alebarberis.github.io/ai-clinical-research/labs/lab3a-supervised-classification.html</loc>
+    <lastmod>2026-05-16T06:32:26.301Z</lastmod>
   </url>
   <url>
     <loc>https://alebarberis.github.io/ai-clinical-research/index.html</loc>
-    <lastmod>2026-04-17T09:18:32.658Z</lastmod>
+    <lastmod>2026-05-16T06:32:26.299Z</lastmod>
+  </url>
+  <url>
+    <loc>https://alebarberis.github.io/ai-clinical-research/labs/lab1b-working-with-data.html</loc>
+    <lastmod>2026-05-16T06:32:26.300Z</lastmod>
   </url>
   <url>
     <loc>https://alebarberis.github.io/ai-clinical-research/labs/lab1a-intro-r.html</loc>
-    <lastmod>2026-04-17T09:18:32.658Z</lastmod>
-  </url>
-  <url>
-    <loc>https://alebarberis.github.io/ai-clinical-research/labs/lab2b-unsupervised-clustering.html</loc>
-    <lastmod>2026-04-17T09:18:32.659Z</lastmod>
+    <lastmod>2026-05-16T06:32:26.299Z</lastmod>
   </url>
 </urlset>
